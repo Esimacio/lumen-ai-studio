@@ -281,6 +281,20 @@ function ImageConstraints({ constraints, setConstraints, activeModel, specs, bac
                 <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "4px", lineHeight: 1.35 }}>
                   CPU is slow but safest. Vulkan works on supported GPUs. CUDA is shown only when NVIDIA CUDA support is available.
                 </span>
+                {constraints.backendType === "cuda" && specs?.gpu_name && String(specs.gpu_name).toLowerCase().includes("gtx") && (
+                  <div style={{
+                    marginTop: "12px",
+                    padding: "10px 14px",
+                    background: "rgba(239, 68, 68, 0.08)",
+                    border: "1px dashed rgb(239, 68, 68)",
+                    borderRadius: "8px",
+                    fontSize: "0.75rem",
+                    color: "var(--md-sys-color-on-surface)",
+                    lineHeight: "1.45"
+                  }}>
+                    <strong>Performance Alert:</strong> Your graphics card (<code>{specs.gpu_name}</code>) is a GTX-series GPU which lacks hardware <strong>Tensor Cores</strong>. Running in CUDA mode will be up to 3x slower. We strongly recommend switching to <strong>Vulkan GPU</strong> for optimal generation speed.
+                  </div>
+                )}
                 {backendOptions?.unavailable?.length > 0 && (
                   <div style={{ marginTop: "8px", display: "flex", flexDirection: "column", gap: "4px" }}>
                     {backendOptions.unavailable.map((backend) => (

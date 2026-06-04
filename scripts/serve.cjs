@@ -513,12 +513,25 @@ function getBackendOptions() {
   if (cudaInstalled && !cudaAvailable) {
     unavailable.push({ id: "cuda", label: "CUDA GPU", reason: "Installed, but CUDA backend validation failed." });
   }
+  let defaultBackend = "cpu";
+  if (cudaAvailable) {
+    const gpuName = String(getGpuInfo().name).toLowerCase();
+    const isGtxCard = gpuName.includes("gtx");
+    if (isGtxCard && vulkanAvailable) {
+      defaultBackend = "vulkan"; // Default to Vulkan for GTX cards because of lack of Tensor Cores
+    } else {
+      defaultBackend = "cuda";
+    }
+  } else if (vulkanAvailable) {
+    defaultBackend = "vulkan";
+  }
+
   cachedBackendOptions = {
     options,
     unavailable,
     cudaAvailable,
     vulkanAvailable,
-    defaultBackendType: cudaAvailable ? "cuda" : vulkanAvailable ? "vulkan" : "cpu",
+    defaultBackendType: defaultBackend,
   };
   return cachedBackendOptions;
 }
