@@ -604,7 +604,10 @@ function getBackendOptions() {
   const rocmAvailable = rocmInstalled && hasAmdGpu() && backendAccepts(BACKEND_PATHS.linuxRocm, "rocm");
   const cpuInstalled = osPlatform === "linux" && fs.existsSync(BACKEND_PATHS.linuxCpu);
   const metalInstalled = osPlatform === "darwin" && fs.existsSync(BACKEND_PATHS.mac);
-  const metalAvailable = metalInstalled && backendAccepts(BACKEND_PATHS.mac, "metal");
+  // Darwin release binaries are Metal builds. Treat an installed macOS backend
+  // as Metal-capable so the UI does not default to CPU if a probe flag changes
+  // upstream.
+  const metalAvailable = metalInstalled;
 
   const options = [{ id: "cpu", label: "CPU", available: true }];
   if (metalAvailable) options.push({ id: "metal", label: "Metal GPU", available: true });
@@ -1053,6 +1056,11 @@ async function startBackend(settings = {}) {
       backendLoadState.device = deviceMatch[1].trim();
       currentSettings.backendDevice = backendLoadState.device;
     }
+    const metalDeviceMatch = cleanOutput.match(/GPU name:\s*([^\r\n]+)/);
+    if (metalDeviceMatch) {
+      backendLoadState.device = metalDeviceMatch[1].trim();
+      currentSettings.backendDevice = backendLoadState.device;
+    }
     if (cleanOutput.includes("ggml_cuda_init")) {
       backendLoadState.backendMode = "CUDA GPU";
       currentSettings.backendMode = "CUDA GPU";
@@ -1064,6 +1072,10 @@ async function startBackend(settings = {}) {
     if (cleanOutput.includes("ggml_hip") || cleanOutput.includes("ggml_rocm")) {
       backendLoadState.backendMode = "ROCm GPU";
       currentSettings.backendMode = "ROCm GPU";
+    }
+    if (cleanOutput.includes("ggml_metal")) {
+      backendLoadState.backendMode = "Metal GPU";
+      currentSettings.backendMode = "Metal GPU";
     }
     if (cleanOutput.includes("[ERROR]")) {
       const nextError = describeBackendError(cleanOutput.trim(), currentSettings.model);
