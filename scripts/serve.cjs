@@ -34,6 +34,7 @@ const BACKEND_PATHS = {
   linuxCuda: path.join(ROOT, "app", "backend", "linux", "cuda", "sd-cuda"),
 };
 let BACKEND_PATH = "";
+const backendSupportsFlags = {};
 if (osPlatform === "win32") {
   let hasNvidia = false;
   try {
@@ -640,17 +641,25 @@ function backendAccepts(binaryPath, backendName) {
       "--model", path.join(MODELS, "__backend_probe_missing__.safetensors"),
       "--listen-port", "18082",
     ];
-    let result = spawnSync(binaryPath, probeArgs, { encoding: "utf8", timeout: 5000 });
+    const spawnEnv = { ...process.env };
+    if (osPlatform === "linux") {
+      const extraLibs = [path.dirname(binaryPath)];
+      const existing = spawnEnv.LD_LIBRARY_PATH || "";
+      spawnEnv.LD_LIBRARY_PATH = extraLibs.join(":") + (existing ? ":" + existing : "");
+    }
+    let result = spawnSync(binaryPath, probeArgs, { env: spawnEnv, encoding: "utf8", timeout: 5000 });
     let output = `${result.stdout || ""}\n${result.stderr || ""}`;
 
+    let supportsFlags = true;
     // Some binaries do not support --backend. If we see "unknown argument",
     // retry without backend flags so we can still verify the binary launches.
     if (output.includes("unknown argument") && output.includes("--backend")) {
+      supportsFlags = false;
       const fallbackArgs = [
         "--model", path.join(MODELS, "__backend_probe_missing__.safetensors"),
         "--listen-port", "18082",
       ];
-      result = spawnSync(binaryPath, fallbackArgs, { encoding: "utf8", timeout: 5000 });
+      result = spawnSync(binaryPath, fallbackArgs, { env: spawnEnv, encoding: "utf8", timeout: 5000 });
       output = `${result.stdout || ""}\n${result.stderr || ""}`;
     }
 
@@ -663,7 +672,11 @@ function backendAccepts(binaryPath, backendName) {
       return false;
     }
     // A healthy binary prints project-specific log lines when it tries to load the model.
-    return lower.includes("stable-diffusion.cpp") || lower.includes("loading model");
+    const isOk = lower.includes("stable-diffusion.cpp") || lower.includes("loading model");
+    if (isOk) {
+      backendSupportsFlags[binaryPath] = supportsFlags;
+    }
+    return isOk;
   } catch (_) {
     return false;
   }
@@ -852,36 +865,28 @@ async function startBackend(settings = {}) {
     "--threads",     String(runThreads),
   ];
 
+  const supportsFlags = backendSupportsFlags[backendPath] !== false;
   const requestedBackend = resolveBackendType(currentSettings.useGpu, currentSettings.backendType);
   if (requestedBackend === "cpu") {
-    args.push(
-      "--backend", "cpu",
-      "--params-backend", "cpu",
-      "--rng", "cpu",
-      "--sampler-rng", "cpu",
-    );
+    if (supportsFlags) {
+      args.push("--backend", "cpu", "--params-backend", "cpu");
+    }
+    args.push("--rng", "cpu", "--sampler-rng", "cpu");
   } else if (requestedBackend === "vulkan") {
-    args.push(
-      "--backend", "vulkan0",
-      "--params-backend", "vulkan0",
-      "--rng", "cpu",
-      "--sampler-rng", "cpu",
-    );
+    if (supportsFlags) {
+      args.push("--backend", "vulkan0", "--params-backend", "vulkan0");
+    }
+    args.push("--rng", "cpu", "--sampler-rng", "cpu");
   } else if (requestedBackend === "cuda") {
-    // CUDA is only supported on Windows. Linux has no reliable prebuilt CUDA binary.
-    args.push(
-      "--backend", "cuda0",
-      "--params-backend", "cuda0",
-      "--rng", "cuda",
-      "--sampler-rng", "cuda",
-    );
+    if (supportsFlags) {
+      args.push("--backend", "cuda0", "--params-backend", "cuda0");
+    }
+    args.push("--rng", "cuda", "--sampler-rng", "cuda");
   } else if (requestedBackend === "rocm") {
-    args.push(
-      "--backend", "rocm0",
-      "--params-backend", "rocm0",
-      "--rng", "cpu",
-      "--sampler-rng", "cpu",
-    );
+    if (supportsFlags) {
+      args.push("--backend", "rocm0", "--params-backend", "rocm0");
+    }
+    args.push("--rng", "cpu", "--sampler-rng", "cpu");
   }
 
   if (currentSettings.vaeTiling) {
