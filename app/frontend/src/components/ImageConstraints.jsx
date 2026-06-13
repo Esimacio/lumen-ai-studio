@@ -86,18 +86,17 @@ function ImageConstraints({
     const currentBackend = constraints.backendType || "cpu";
     if (backendType === currentBackend) return;
 
-    const isGpuBackend = (type) => !["cpu", "openvino-npu"].includes(type);
     const switchesAccelerator =
-      (currentBackend === "openvino-npu" && isGpuBackend(backendType)) ||
-      (isGpuBackend(currentBackend) && backendType === "openvino-npu");
+      (currentBackend === "openvino-npu" && backendType !== "openvino-npu") ||
+      (currentBackend !== "openvino-npu" && backendType === "openvino-npu");
 
     if (serverRunning && switchesAccelerator) {
       const leavingNpu = currentBackend === "openvino-npu";
       const confirmed = await showConfirm({
-        title: leavingNpu ? "Unload NPU Model?" : "Unload GPU Model?",
+        title: leavingNpu ? "Unload NPU Model?" : "Unload Model?",
         message: leavingNpu
-          ? "The OpenVINO NPU model must be unloaded before switching to the GPU backend."
-          : "The GPU model must be unloaded before switching to the OpenVINO NPU backend.",
+          ? "The OpenVINO NPU model must be unloaded before switching to the standard backend."
+          : "The active model must be unloaded before switching to the OpenVINO NPU backend.",
         confirmLabel: "Unload",
         cancelLabel: "Cancel",
         danger: true,

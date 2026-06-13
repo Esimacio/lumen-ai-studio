@@ -332,7 +332,9 @@ function ModelManager({ activeModel, setActiveModel, serverRunning, setServerRun
       
       let isReady = false;
       let crashError = null;
-      for (let i = 0; i < 240; i++) { // Poll for up to 120 seconds (240 * 500ms)
+      const isOpenVinoModel = modelInfo?.backendType === "openvino-npu";
+      const maxStartupPolls = isOpenVinoModel ? 1200 : 240;
+      for (let i = 0; i < maxStartupPolls; i++) {
         const status = await getBackendStatus();
         if (status.loading) {
           setModelLoadProgress({
@@ -355,7 +357,7 @@ function ModelManager({ activeModel, setActiveModel, serverRunning, setServerRun
           crashError = status.error;
           break;
         }
-        if (!status.running && i > 3) {
+        if (!status.running && !status.loading?.active && i > 3) {
           crashError = "The backend process terminated immediately on startup.";
           break;
         }
