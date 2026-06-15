@@ -17,8 +17,8 @@ const processMessageContent = (rawText, apiReasoning = "") => {
     return { content, reasoning };
   }
 
-  const startTags = ["<|channel|>thought", "<|think|>", "<|thought|>", "<think>", "<thought>"];
-  const endTags = ["<|channel|>model", "<|turn>model", "<|im_start|>model", "</think>", "</thought>", "</|think>", "</|thought>"];
+  const startTags = ["<|channel|>thought", "<|think|>", "<|thought|>", "<thinking>", "<thought>"];
+  const endTags = ["<|channel|>model", "<|turn>model", "<|im_start|>model", "</thinking>", "</thought>", "<|/think|>", "<|/thought|>"];
 
   let startIdx = -1;
   let matchedStartTag = "";
@@ -50,13 +50,13 @@ const processMessageContent = (rawText, apiReasoning = "") => {
       reasoning = (reasoning + "\n" + extractedReasoning).trim();
       
       const afterEndText = rawText.substring(actualEndIdxInRaw + matchedEndTag.length);
-      content = rawText.substring(0, startIdx) + afterEndText;
+      content = (rawText.substring(0, startIdx) + afterEndText).trim();
       
       return processMessageContent(content, reasoning);
     } else {
       const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length).trim();
       reasoning = (reasoning + "\n" + extractedReasoning).trim();
-      content = rawText.substring(0, startIdx);
+      content = rawText.substring(0, startIdx).trim();
     }
   }
 
@@ -207,6 +207,40 @@ function TextChat({
     loadingModelRef.current = loadingModel;
   }, [loadingModel]);
 
+  // Watch for textSettings changes and reload model if backend mode changed
+  const prevGpuLayersRef = useRef(textSettings?.gpuLayers);
+  const prevThreadsRef = useRef(textSettings?.threads);
+  const prevContextSizeRef = useRef(textSettings?.contextSize);
+  
+  useEffect(() => {
+    const currentGpuLayers = textSettings?.gpuLayers;
+    const currentThreads = textSettings?.threads;
+    const currentContextSize = textSettings?.contextSize;
+    
+    // Only reload if model is already loaded and relevant settings changed
+    if (status.ready && selectedModel && !loadingModel && !isBusy) {
+      const gpuLayersChanged = currentGpuLayers !== prevGpuLayersRef.current;
+      const threadsChanged = currentThreads !== prevThreadsRef.current;
+      const contextSizeChanged = currentContextSize !== prevContextSizeRef.current;
+      
+      if (gpuLayersChanged || threadsChanged || contextSizeChanged) {
+        console.log("[TextChat] Settings changed, reloading model...", {
+          gpuLayers: { from: prevGpuLayersRef.current, to: currentGpuLayers },
+          threads: { from: prevThreadsRef.current, to: currentThreads },
+          contextSize: { from: prevContextSizeRef.current, to: currentContextSize }
+        });
+        
+        // Reload the model with new settings
+        handleModelChange(selectedModel);
+      }
+    }
+    
+    // Update refs
+    prevGpuLayersRef.current = currentGpuLayers;
+    prevThreadsRef.current = currentThreads;
+    prevContextSizeRef.current = currentContextSize;
+  }, [textSettings?.gpuLayers, textSettings?.threads, textSettings?.contextSize]);
+
   useEffect(() => {
     if (!supportsVision) {
       setAttachments((current) => current.filter((attachment) => attachment.type !== "image"));
@@ -337,7 +371,7 @@ function TextChat({
       const result = await startLlm(filename, {
         threads: textSettings?.threads || specs?.cpu_cores_physical || 4,
         contextSize: textSettings?.contextSize || 4096,
-        gpuLayers: -1,
+        gpuLayers: textSettings?.gpuLayers ?? -1,
         enableThinking: textSettings?.enableThinking !== false,
       });
       setStatus({ ...status, ...result, ready: true, running: true, settings: result.settings });
@@ -915,7 +949,7 @@ function TextChat({
       </section>
     </div>
   );
-}
+}
 function parseInlineMarkdown(text) {
   const regex = /(\*\*.*?\*\*|`.*?`|\*.*?\*|\[.*?\]\(.*?\))/g;
   const parts = text.split(regex);

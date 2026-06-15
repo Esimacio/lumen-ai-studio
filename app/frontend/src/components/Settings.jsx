@@ -1,5 +1,5 @@
 import React, { memo, useEffect } from "react";
-import { Crop, Sliders, Cpu, Info, MessageSquare, SlidersHorizontal } from "lucide-react";
+import { Crop, Sliders, Cpu, Info, MessageSquare, SlidersHorizontal, Zap } from "lucide-react";
 import { stopServer, formatBytes } from "../services/api";
 
 const ASPECT_RATIOS = [
@@ -567,25 +567,97 @@ function Settings({
                 </span>
               </div>
 
-              {/* CPU Threads slider */}
-              <div className="m3-slider-group" style={{ marginTop: "16px" }}>
-                <div className="m3-slider-header">
-                  <span className="m3-slider-label">CPU Threads</span>
-                  <span className="m3-slider-value">{textSettings.threads} threads</span>
+              {/* CPU/GPU Mode Toggle */}
+              {(specs?.gpu_name && !specs.gpu_name.includes("Loading") && specs.gpu_name !== "Unavailable") && (
+                <div className="m3-slider-group" style={{ marginTop: "16px" }}>
+                  <div className="m3-slider-header">
+                    <span className="m3-slider-label">Text Generation Backend</span>
+                    <span className="m3-slider-value">
+                      {(textSettings.gpuLayers === 0 || textSettings.gpuLayers === undefined) ? "CPU" : "GPU"}
+                    </span>
+                  </div>
+                  <div className="m3-segmented-button" style={{ marginTop: "8px" }}>
+                    <div
+                      className={`m3-segment-item ${(textSettings.gpuLayers === 0 || textSettings.gpuLayers === undefined) ? "active" : ""}`}
+                      onClick={() => updateTextSetting("gpuLayers", 0)}
+                      title="Run model entirely on CPU. Best for Intel Arc GPUs which have poor Vulkan performance."
+                      style={{ cursor: "pointer" }}
+                    >
+                      <Cpu size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
+                      CPU
+                    </div>
+                    <div
+                      className={`m3-segment-item ${(textSettings.gpuLayers !== 0 && textSettings.gpuLayers !== undefined) ? "active" : ""}`}
+                      onClick={() => updateTextSetting("gpuLayers", -1)}
+                      title="Offload model layers to GPU for faster generation."
+                      style={{ cursor: "pointer" }}
+                    >
+                      <Zap size={14} style={{ marginRight: "6px", verticalAlign: "middle" }} />
+                      GPU
+                    </div>
+                  </div>
+                  <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", lineHeight: "1.3", marginTop: "8px", display: "block" }}>
+                    {(textSettings.gpuLayers === 0 || textSettings.gpuLayers === undefined) ? (
+                      <span>
+                        <strong>CPU mode:</strong> Uses processor only. Recommended for Intel Arc GPUs which currently perform better on CPU with llama.cpp.
+                      </span>
+                    ) : (
+                      <span>
+                        <strong>GPU mode:</strong> Offloads model layers to graphics card. Best for NVIDIA/AMD GPUs. Intel Arc may be slower due to Vulkan driver limitations.
+                      </span>
+                    )}
+                  </span>
                 </div>
-                <input
-                  type="range"
-                  className="m3-slider"
-                  value={textSettings.threads}
-                  onChange={(e) => updateTextSetting("threads", parseInt(e.target.value))}
-                  min="1"
-                  max={Math.max(16, specs?.cpu_cores_logical || 16)}
-                  step="1"
-                />
-                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", lineHeight: "1.3" }}>
-                  Number of physical CPU threads allocated for computation. Typically should match or be slightly lower than your physical cores.
-                </span>
-              </div>
+              )}
+
+              {/* GPU Layers slider - only show when GPU mode is selected */}
+              {(specs?.gpu_name && !specs.gpu_name.includes("Loading") && specs.gpu_name !== "Unavailable") && (textSettings.gpuLayers !== 0 && textSettings.gpuLayers !== undefined) && (
+                <div className="m3-slider-group" style={{ marginTop: "16px", padding: "12px", background: "rgba(99, 102, 241, 0.05)", borderRadius: "8px", border: "1px solid rgba(99, 102, 241, 0.2)" }}>
+                  <div className="m3-slider-header">
+                    <span className="m3-slider-label">GPU Layer Offload</span>
+                    <span className="m3-slider-value">
+                      {textSettings.gpuLayers === -1 ? "All layers" : `${textSettings.gpuLayers} layers`}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    className="m3-slider"
+                    value={textSettings.gpuLayers === -1 ? 999 : textSettings.gpuLayers}
+                    onChange={(e) => {
+                      const val = parseInt(e.target.value);
+                      updateTextSetting("gpuLayers", val === 999 ? -1 : val);
+                    }}
+                    min="0"
+                    max="999"
+                    step="1"
+                  />
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.7rem", color: "var(--md-sys-color-outline)", marginTop: "4px" }}>
+                    <span>0 (CPU only)</span>
+                    <span>All (-1)</span>
+                  </div>
+                  <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", lineHeight: "1.3", marginTop: "8px", display: "block" }}>
+                    <strong>More layers = faster but uses more VRAM.</strong> Start with "All" and reduce if you get out-of-memory errors. 
+                    {textSettings.gpuLayers === -1 && " Currently all layers will be loaded into GPU memory."}
+                    {textSettings.gpuLayers !== -1 && textSettings.gpuLayers !== 0 && ` Currently ${textSettings.gpuLayers} layers on GPU, rest on CPU.`}
+                  </span>
+                </div>
+              )}
+
+              {/* CPU-only fallback message when no GPU detected */}
+              {(!specs?.gpu_name || specs.gpu_name.includes("Loading") || specs.gpu_name === "Unavailable") && (
+                <div style={{ 
+                  marginTop: "16px", 
+                  padding: "10px 14px", 
+                  background: "rgba(251, 191, 36, 0.08)", 
+                  border: "1px dashed rgb(251, 191, 36)", 
+                  borderRadius: "8px",
+                  fontSize: "0.75rem",
+                  color: "var(--md-sys-color-on-surface)",
+                  lineHeight: "1.45"
+                }}>
+                  <strong>No GPU detected.</strong> Text generation will use CPU only. Install GPU drivers or restart if you have a dedicated graphics card.
+                </div>
+              )}
             </div>
           </div>
 
