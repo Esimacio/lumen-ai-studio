@@ -365,6 +365,15 @@ export async function chatWithLlm(messages, options = {}) {
       messages,
       temperature: options.temperature,
       max_tokens: options.maxTokens,
+      // New sampling parameters
+      top_p: options.topP,
+      top_k: options.topK,
+      min_p: options.minP,
+      repeat_penalty: options.repeatPenalty,
+      frequency_penalty: options.frequencyPenalty,
+      presence_penalty: options.presencePenalty,
+      seed: options.seed,
+      stop: options.stop,
     }),
   });
   const data = await readJsonResponse(res, "The local text model returned an invalid response.");
@@ -385,6 +394,15 @@ export async function streamChatWithLlm(messages, options = {}, onToken = () => 
       temperature: options.temperature,
       max_tokens: options.maxTokens,
       stream: true,
+      // New sampling parameters
+      top_p: options.topP,
+      top_k: options.topK,
+      min_p: options.minP,
+      repeat_penalty: options.repeatPenalty,
+      frequency_penalty: options.frequencyPenalty,
+      presence_penalty: options.presencePenalty,
+      seed: options.seed,
+      stop: options.stop,
     }),
   };
   if (options.signal) {
@@ -475,6 +493,17 @@ export async function deleteLlmModel(filename) {
     body: JSON.stringify({ filename }),
   });
   return await readJsonResponse(res, "The local server returned an invalid text model delete response.");
+}
+
+export async function getLlmRecommendations(useCase = "chat", limit = 10) {
+  try {
+    const res = await fetch(`/api/llm/recommend?useCase=${encodeURIComponent(useCase)}&limit=${limit}`);
+    const data = await res.json();
+    if (!res.ok || !data.ok) return null;
+    return data.recommendations;
+  } catch (_) {
+    return null;
+  }
 }
 
 export async function listGeneratedOutputs() {

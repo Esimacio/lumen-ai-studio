@@ -685,6 +685,287 @@ function Settings({
                   <strong>No GPU detected.</strong> Text generation will use CPU only. Install GPU drivers or restart if you have a dedicated graphics card.
                 </div>
               )}
+
+              {/* Performance Profile Preset */}
+              <div className="m3-text-field" style={{ marginTop: "16px" }}>
+                <label className="m3-text-field-label">Performance Profile</label>
+                <select
+                  value={textSettings.performanceProfile || "balanced"}
+                  onChange={(e) => {
+                    const profile = e.target.value;
+                    updateTextSetting("performanceProfile", profile);
+                    // Auto-apply recommended settings for the profile
+                    if (profile === "potato") {
+                      updateTextSetting("contextSize", 2048);
+                      updateTextSetting("cacheTypeK", "q4_0");
+                      updateTextSetting("cacheTypeV", "q4_0");
+                      updateTextSetting("mlock", true);
+                      updateTextSetting("gpuLayers", 0);
+                    } else if (profile === "balanced") {
+                      updateTextSetting("contextSize", 4096);
+                      updateTextSetting("cacheTypeK", "q8_0");
+                      updateTextSetting("cacheTypeV", "q8_0");
+                      updateTextSetting("mlock", false);
+                      updateTextSetting("gpuLayers", -1);
+                    } else if (profile === "high") {
+                      updateTextSetting("contextSize", 8192);
+                      updateTextSetting("cacheTypeK", "q8_0");
+                      updateTextSetting("cacheTypeV", "q8_0");
+                      updateTextSetting("mlock", false);
+                      updateTextSetting("gpuLayers", -1);
+                    }
+                  }}
+                  className="m3-input"
+                  style={{ marginTop: "6px", height: "40px", cursor: "pointer" }}
+                >
+                  <option value="potato">🥔 Potato PC (Low-end CPU, no GPU)</option>
+                  <option value="balanced">⚖️ Balanced (Mid-range GPU/CPU)</option>
+                  <option value="high">🚀 High-End (Fast GPU, 16GB+ VRAM)</option>
+                  <option value="custom">🔧 Custom (Manual settings)</option>
+                </select>
+                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "4px" }}>
+                  One-click optimization for your hardware tier. Select "Custom" to fine-tune individual settings.
+                </span>
+              </div>
+
+              {/* Advanced Settings Toggle */}
+              <details style={{ marginTop: "16px" }}>
+                <summary style={{ 
+                  fontSize: "0.85rem", 
+                  fontWeight: 600, 
+                  color: "var(--md-sys-color-primary)",
+                  cursor: "pointer",
+                  userSelect: "none"
+                }}>
+                  Advanced Settings
+                </summary>
+                <div style={{ marginTop: "12px", paddingLeft: "8px" }}>
+                  
+                  {/* CPU Threads */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">CPU Threads</span>
+                      <span className="m3-slider-value">{textSettings.threads || specs?.cpu_cores_physical || 4}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.threads || specs?.cpu_cores_physical || 4}
+                      onChange={(e) => updateTextSetting("threads", parseInt(e.target.value))}
+                      min="1"
+                      max="64"
+                      step="1"
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", lineHeight: "1.3" }}>
+                      Lower = less oversaturation on GPU mode. Auto-detected: {specs?.cpu_cores_physical || 4} physical cores.
+                    </span>
+                  </div>
+
+                  {/* Max Tokens */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">Max Tokens</span>
+                      <span className="m3-slider-value">{textSettings.maxTokens || 1024}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.maxTokens || 1024}
+                      onChange={(e) => updateTextSetting("maxTokens", parseInt(e.target.value))}
+                      min="128"
+                      max="4096"
+                      step="128"
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", lineHeight: "1.3" }}>
+                      Maximum tokens to generate per response.
+                    </span>
+                  </div>
+
+                  {/* Top P */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">Top P</span>
+                      <span className="m3-slider-value">{textSettings.topP || 0.95}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.topP || 0.95}
+                      onChange={(e) => updateTextSetting("topP", parseFloat(e.target.value))}
+                      min="0"
+                      max="1"
+                      step="0.05"
+                    />
+                  </div>
+
+                  {/* Top K */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">Top K</span>
+                      <span className="m3-slider-value">{textSettings.topK || 40}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.topK || 40}
+                      onChange={(e) => updateTextSetting("topK", parseInt(e.target.value))}
+                      min="1"
+                      max="100"
+                      step="1"
+                    />
+                  </div>
+
+                  {/* Min P */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">Min P</span>
+                      <span className="m3-slider-value">{textSettings.minP || 0.05}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.minP || 0.05}
+                      onChange={(e) => updateTextSetting("minP", parseFloat(e.target.value))}
+                      min="0"
+                      max="1"
+                      step="0.01"
+                    />
+                  </div>
+
+                  {/* Repeat Penalty */}
+                  <div className="m3-slider-group" style={{ marginTop: "12px" }}>
+                    <div className="m3-slider-header">
+                      <span className="m3-slider-label">Repeat Penalty</span>
+                      <span className="m3-slider-value">{textSettings.repeatPenalty || 1.1}</span>
+                    </div>
+                    <input
+                      type="range"
+                      className="m3-slider"
+                      value={textSettings.repeatPenalty || 1.1}
+                      onChange={(e) => updateTextSetting("repeatPenalty", parseFloat(e.target.value))}
+                      min="0.5"
+                      max="2.0"
+                      step="0.05"
+                    />
+                  </div>
+
+                  {/* KV Cache Type K */}
+                  <div className="m3-text-field" style={{ marginTop: "12px" }}>
+                    <label className="m3-text-field-label">KV Cache Type K</label>
+                    <select
+                      value={textSettings.cacheTypeK || "q8_0"}
+                      onChange={(e) => updateTextSetting("cacheTypeK", e.target.value)}
+                      className="m3-input"
+                      style={{ marginTop: "6px", height: "40px", cursor: "pointer" }}
+                    >
+                      <option value="f16">f16 (Highest quality, most memory)</option>
+                      <option value="q8_0">q8_0 (Balanced, 2x memory reduction)</option>
+                      <option value="q4_0">q4_0 (Aggressive, 4x memory reduction)</option>
+                    </select>
+                  </div>
+
+                  {/* KV Cache Type V */}
+                  <div className="m3-text-field" style={{ marginTop: "12px" }}>
+                    <label className="m3-text-field-label">KV Cache Type V</label>
+                    <select
+                      value={textSettings.cacheTypeV || "q8_0"}
+                      onChange={(e) => updateTextSetting("cacheTypeV", e.target.value)}
+                      className="m3-input"
+                      style={{ marginTop: "6px", height: "40px", cursor: "pointer" }}
+                    >
+                      <option value="f16">f16 (Highest quality, most memory)</option>
+                      <option value="q8_0">q8_0 (Balanced, 2x memory reduction)</option>
+                      <option value="q4_0">q4_0 (Aggressive, 4x memory reduction)</option>
+                    </select>
+                  </div>
+
+                  {/* Flash Attention Toggle */}
+                  <div style={{ marginTop: "12px" }}>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "0.85rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={textSettings.flashAttn !== false}
+                        onChange={(e) => updateTextSetting("flashAttn", e.target.checked)}
+                        style={{ width: "16px", height: "16px", marginTop: "3px", accentColor: "var(--md-sys-color-primary)", cursor: "pointer" }}
+                      />
+                      <div>
+                        <strong>Flash Attention</strong>
+                        <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
+                          Memory-efficient attention for faster generation and lower VRAM usage.
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Memory Lock (mlock) Toggle */}
+                  <div style={{ marginTop: "12px" }}>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "0.85rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={textSettings.mlock === true}
+                        onChange={(e) => updateTextSetting("mlock", e.target.checked)}
+                        style={{ width: "16px", height: "16px", marginTop: "3px", accentColor: "var(--md-sys-color-primary)", cursor: "pointer" }}
+                      />
+                      <div>
+                        <strong>Memory Lock (mlock)</strong>
+                        <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
+                          Prevent OS from paging model to disk. Recommended for CPU mode.
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Memory Map (mmap) Toggle */}
+                  <div style={{ marginTop: "12px" }}>
+                    <label style={{ display: "flex", alignItems: "flex-start", gap: "10px", cursor: "pointer", fontSize: "0.85rem" }}>
+                      <input
+                        type="checkbox"
+                        checked={textSettings.mmap !== false}
+                        onChange={(e) => updateTextSetting("mmap", e.target.checked)}
+                        style={{ width: "16px", height: "16px", marginTop: "3px", accentColor: "var(--md-sys-color-primary)", cursor: "pointer" }}
+                      />
+                      <div>
+                        <strong>Memory Map (mmap)</strong>
+                        <div style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "2px" }}>
+                          Faster model loading via memory-mapped files.
+                        </div>
+                      </div>
+                    </label>
+                  </div>
+
+                  {/* Seed */}
+                  <div className="m3-text-field" style={{ marginTop: "12px" }}>
+                    <label className="m3-text-field-label">Seed (optional)</label>
+                    <input
+                      type="number"
+                      value={textSettings.seed || ""}
+                      onChange={(e) => updateTextSetting("seed", e.target.value ? parseInt(e.target.value) : null)}
+                      placeholder="Random"
+                      className="m3-input"
+                      style={{ marginTop: "6px", height: "40px" }}
+                    />
+                    <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginTop: "4px" }}>
+                      Set for reproducible outputs. Leave empty for random.
+                    </span>
+                  </div>
+                </div>
+              </details>
+
+              {/* NPU Detection Badge */}
+              {specs?.npu?.detected && (
+                <div style={{
+                  marginTop: "16px",
+                  padding: "10px 14px",
+                  background: "rgba(99, 102, 241, 0.08)",
+                  border: "1px dashed var(--md-sys-color-primary)",
+                  borderRadius: "8px",
+                  fontSize: "0.75rem",
+                  color: "var(--md-sys-color-on-surface)",
+                  lineHeight: "1.45"
+                }}>
+                  <strong>Intel NPU detected.</strong> NPU text generation via OpenVINO/IPEX-LLM is on the roadmap for future updates.
+                </div>
+              )}
             </div>
           </div>
 

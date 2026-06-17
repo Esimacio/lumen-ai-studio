@@ -130,7 +130,23 @@ function App() {
       temperature: 0.7,
       systemPrompt: "You are a helpful local AI assistant.",
       threads: Math.max(4, Math.min(16, (navigator.hardwareConcurrency || 4) - 2)),
-      enableThinking: true
+      enableThinking: true,
+      // New performance settings
+      gpuLayers: -1,
+      maxTokens: 1024,
+      topP: 0.95,
+      topK: 40,
+      minP: 0.05,
+      repeatPenalty: 1.1,
+      seed: null,
+      performanceProfile: "balanced",
+      flashAttn: true,
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      mlock: false,
+      mmap: true,
+      cachePrompt: true,
+      defragThold: 0.1,
     };
   });
 

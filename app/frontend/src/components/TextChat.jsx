@@ -9,7 +9,7 @@ import {
   stopLlm,
 } from "../services/api";
 
-const processMessageContent = (rawText, apiReasoning = "") => {
+const processMessageContent = (rawText, apiReasoning = "", enableThinking = true) => {
   let content = rawText;
   let reasoning = apiReasoning || "";
 
@@ -47,17 +47,28 @@ const processMessageContent = (rawText, apiReasoning = "") => {
     if (endIdx !== -1) {
       const actualEndIdxInRaw = startIdx + matchedStartTag.length + endIdx;
       const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length, actualEndIdxInRaw).trim();
-      reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      
+      // Only extract reasoning if thinking is enabled
+      if (enableThinking) {
+        reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      }
       
       const afterEndText = rawText.substring(actualEndIdxInRaw + matchedEndTag.length);
       content = (rawText.substring(0, startIdx) + afterEndText).trim();
       
-      return processMessageContent(content, reasoning);
+      return processMessageContent(content, reasoning, enableThinking);
     } else {
       const extractedReasoning = rawText.substring(startIdx + matchedStartTag.length).trim();
-      reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      // Only extract reasoning if thinking is enabled
+      if (enableThinking) {
+        reasoning = (reasoning + "\n" + extractedReasoning).trim();
+      }
       content = rawText.substring(0, startIdx).trim();
     }
+  }
+
+  return { content, reasoning };
+};
   }
 
   return { content, reasoning };
@@ -143,6 +154,11 @@ function TextChat({
   const chatMessagesRef = useRef(null);
   const prevMessagesLengthRef = useRef(0);
   const abortControllerRef = useRef(null);
+  // rAF batching: accumulate token updates and flush once per frame
+  const tokenBufferRef = useRef(null);
+  const rafRef = useRef(null);
+  // Debounced stats: only update stats pill every 250ms
+  const statsDebounceRef = useRef(null);
 
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
@@ -477,7 +493,12 @@ function TextChat({
 
       const response = await streamChatWithLlm(requestMessages, {
         temperature: textSettings?.temperature || 0.7,
-        maxTokens: 768,
+        maxTokens: textSettings?.maxTokens || 1024,
+        topP: textSettings?.topP,
+        topK: textSettings?.topK,
+        minP: textSettings?.minP,
+        repeatPenalty: textSettings?.repeatPenalty,
+        seed: textSettings?.seed,
         signal: controller.signal,
       }, (_token, fullText, _reasoningToken, fullReasoning) => {
         const now = performance.now();
@@ -489,7 +510,7 @@ function TextChat({
           ? Math.max(0.05, (now - firstTokenAt) / 1000)
           : Math.max(0.05, (now - requestStartedAt) / 1000);
         
-        const processed = processMessageContent(fullText, fullReasoning);
+        const processed = processMessageContent(fullText, fullReasoning, textSettings?.enableThinking !== false);
         assistantText = processed.content;
         assistantReasoning = processed.reasoning;
 
@@ -505,24 +526,46 @@ function TextChat({
           ? thinkingDuration 
           : (thinkingStartedAt ? (now - thinkingStartedAt) / 1000 : 0);
 
-        setMessages((prev) => {
-          const updated = [...prev];
-          if (updated.length > 0 && updated[updated.length - 1].role === "assistant") {
-            updated[updated.length - 1] = {
-              ...updated[updated.length - 1],
-              content: processed.content,
-              reasoning: processed.reasoning,
-              thinkingDuration: currentThinkingDuration,
-              generationStats: {
-                status: "streaming",
-                tokens: streamedTokens,
-                tokensPerSecond: streamedTokens / generationSeconds,
-                seconds: (now - requestStartedAt) / 1000,
-              },
-            };
-          }
-          return updated;
-        });
+        // Debounced stats update: only update stats every 250ms for smoother UI
+        // while text still updates per-frame via rAF batching
+        const currentStats = {
+          status: "streaming",
+          tokens: streamedTokens,
+          tokensPerSecond: streamedTokens / generationSeconds,
+          seconds: (now - requestStartedAt) / 1000,
+        };
+
+        // rAF batching: accumulate updates and flush once per frame (~16ms)
+        // This reduces React re-renders from N per token to ~60/sec
+        tokenBufferRef.current = {
+          content: processed.content,
+          reasoning: processed.reasoning,
+          thinkingDuration: currentThinkingDuration,
+          stats: currentStats,
+        };
+
+        if (!rafRef.current) {
+          rafRef.current = requestAnimationFrame(() => {
+            const buffer = tokenBufferRef.current;
+            if (buffer) {
+              setMessages((prev) => {
+                const updated = [...prev];
+                if (updated.length > 0 && updated[updated.length - 1].role === "assistant") {
+                  updated[updated.length - 1] = {
+                    ...updated[updated.length - 1],
+                    content: buffer.content,
+                    reasoning: buffer.reasoning,
+                    thinkingDuration: buffer.thinkingDuration,
+                    generationStats: buffer.stats,
+                  };
+                }
+                return updated;
+              });
+              tokenBufferRef.current = null;
+            }
+            rafRef.current = null;
+          });
+        }
       });
 
       const completedAt = performance.now();
@@ -546,7 +589,7 @@ function TextChat({
         seconds: exactSeconds,
       };
       
-      const processed = processMessageContent(assistantText, response.reasoningContent || assistantReasoning);
+      const processed = processMessageContent(assistantText, response.reasoningContent || assistantReasoning, textSettings?.enableThinking !== false);
       const finalMessages = [...nextMessages, {
         role: "assistant",
         content: processed.content,
@@ -758,7 +801,8 @@ function TextChat({
               {messages.map((message, index) => {
                 const processed = processMessageContent(
                   Array.isArray(message.content) ? "" : (message.content || ""),
-                  message.reasoning || ""
+                  message.reasoning || "",
+                  textSettings?.enableThinking !== false
                 );
                 const displayContent = Array.isArray(message.content) ? message.content : processed.content;
                 const displayReasoning = processed.reasoning;

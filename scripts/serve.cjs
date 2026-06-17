@@ -11,6 +11,13 @@ const os       = require("os");
 const path     = require("path");
 const { spawn, spawnSync, execSync, exec } = require("child_process");
 
+// HTTP keep-alive agent for llama-server (eliminates TCP handshake per request)
+const llmHttpAgent = new http.Agent({
+  keepAlive: true,
+  maxSockets: 1,
+  keepAliveMsecs: 30000,
+});
+
 const HF_MODEL_CACHE_TTL_MS = 5 * 60 * 1000;
 const hfModelCache = new Map();
 
@@ -80,9 +87,11 @@ if (!fs.existsSync(LLM_MODELS)) {
 const LLM_BACKEND_PATHS = {
   winCuda: path.join(ROOT, "app", "llm-backend", "win", "cuda", "llama-server.exe"),
   winVulkan: path.join(ROOT, "app", "llm-backend", "win", "vulkan", "llama-server.exe"),
+  winSycl: path.join(ROOT, "app", "llm-backend", "win", "sycl", "llama-server.exe"),
   winCpu: path.join(ROOT, "app", "llm-backend", "win", "cpu", "llama-server.exe"),
   linuxCuda: path.join(ROOT, "app", "llm-backend", "linux", "cuda", "llama-server"),
   linuxVulkan: path.join(ROOT, "app", "llm-backend", "linux", "vulkan", "llama-server"),
+  linuxSycl: path.join(ROOT, "app", "llm-backend", "linux", "sycl", "llama-server"),
   linuxCpu: path.join(ROOT, "app", "llm-backend", "linux", "cpu", "llama-server"),
   macArm64: path.join(ROOT, "app", "llm-backend", "mac", "arm64", "llama-server"),
   macX64: path.join(ROOT, "app", "llm-backend", "mac", "x64", "llama-server"),
@@ -130,6 +139,16 @@ let llmSettings = {
   backendMode: "",
   backendBinary: "",
   supportsVision: false,
+  flashAttn: true,
+  cacheTypeK: "q8_0",
+  cacheTypeV: "q8_0",
+  mlock: false,
+  mmap: true,
+  cachePrompt: true,
+  defragThold: 0.1,
+  batchSize: 512,
+  ubatchSize: 512,
+  performanceProfile: "balanced",
 };
 let backendLoadState = {
   active: false,
@@ -170,6 +189,44 @@ let cachedVramInfo = null;
 
 function roundGb(bytes) {
   return Math.round((bytes / (1024 ** 3)) * 100) / 100;
+}
+
+// Detect physical CPU cores (not logical/hyperthreaded cores)
+// llama.cpp docs: "Do NOT set threads too high — major cause of oversaturation"
+function getPhysicalCores() {
+  const cpus = os.cpus();
+  const logicalCores = cpus.length;
+  
+  if (logicalCores <= 1) return 1;
+  
+  // Check if hyperthreading is likely: compare unique core IDs vs total
+  // On Windows/Linux, os.cpus() lists each logical core separately
+  // Physical cores typically have the same model but different speeds can indicate HT
+  const uniqueModels = new Set(cpus.map(c => c.model)).size;
+  
+  // If we have very few unique models relative to core count, likely HT
+  // Also check: if logical cores is exactly 2x a common physical core count
+  const commonPhysicalCounts = [2, 4, 6, 8, 10, 12, 16, 20, 24, 32];
+  const isLikelyHT = commonPhysicalCounts.some(physical => logicalCores === physical * 2);
+  
+  if (isLikelyHT || uniqueModels < logicalCores / 2) {
+    return Math.max(1, Math.floor(logicalCores / 2));
+  }
+  
+  return logicalCores;
+}
+
+// Get optimal thread count for llama.cpp
+// GPU mode: fewer threads to avoid CPU-GPU contention (physical/2)
+// CPU mode: use physical cores directly
+function getOptimalThreads(isGpuMode) {
+  const physicalCores = getPhysicalCores();
+  if (isGpuMode) {
+    // llama.cpp benchmark: 4 threads on 7-core CPU + GPU = 9.1 t/s (optimal)
+    // vs 7 threads = 8.7 t/s (oversaturated)
+    return Math.max(1, Math.floor(physicalCores / 2));
+  }
+  return Math.max(1, physicalCores);
 }
 
 function getCpuSample() {
@@ -296,6 +353,44 @@ function detectLlamaVulkanGpu() {
     cachedLlamaVulkanGpu = null;
   }
   return cachedLlamaVulkanGpu;
+}
+
+let cachedLlamaSyclGpu = null;
+let cachedLlamaSyclGpuChecked = false;
+function detectLlamaSyclGpu() {
+  if (cachedLlamaSyclGpuChecked) return cachedLlamaSyclGpu;
+  cachedLlamaSyclGpuChecked = true;
+
+  const backendPath = osPlatform === "win32"
+    ? LLM_BACKEND_PATHS.winSycl
+    : osPlatform === "linux"
+      ? LLM_BACKEND_PATHS.linuxSycl
+      : "";
+  if (!backendPath || !fs.existsSync(backendPath)) return null;
+
+  try {
+    const result = spawnSync(backendPath, ["--list-devices"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+    });
+    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+    const devices = [];
+    const devicePattern = /SYCL\d+\s*:\s*(.+?)\s+\(([\d.]+)\s+MiB(?:,\s*([\d.]+)\s+MiB free)?\)/gi;
+    let match;
+    while ((match = devicePattern.exec(output)) !== null) {
+      devices.push({
+        name: match[1].trim(),
+        vram_gb: Math.round((Number(match[2]) / 1024) * 100) / 100,
+        free_vram_gb: match[3] ? Math.round((Number(match[3]) / 1024) * 100) / 100 : null,
+      });
+    }
+    cachedLlamaSyclGpu = devices.sort((a, b) => b.vram_gb - a.vram_gb)[0] || null;
+  } catch (_) {
+    cachedLlamaSyclGpu = null;
+  }
+  return cachedLlamaSyclGpu;
 }
 
 function getGpuInfo() {
@@ -528,6 +623,80 @@ function getGpuInfo() {
   return cachedGpuInfo;
 }
 
+// ── NPU Detection ─────────────────────────────────────────────────────────────
+let cachedNpuInfo = null;
+function detectNpu() {
+  if (cachedNpuInfo !== null) return cachedNpuInfo;
+  cachedNpuInfo = { detected: false, vendor: null, name: null };
+  
+  if (osPlatform === "win32") {
+    try {
+      const output = execSync(
+        'powershell -NoProfile -Command "Get-PnpDevice | Where-Object { $_.FriendlyName -match \'Intel.*NPU\' -or $_.FriendlyName -match \'Neural\' } | Select-Object -First 1 FriendlyName"',
+        { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 }
+      ).trim();
+      if (output && output.includes("NPU")) {
+        cachedNpuInfo = { detected: true, vendor: "intel", name: output.trim() };
+      }
+    } catch (_) {}
+  } else if (osPlatform === "linux") {
+    try {
+      const output = execSync("lspci | grep -i 'neural\|npu' || true", {
+        encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000
+      }).trim();
+      if (output) {
+        const isIntel = output.toLowerCase().includes("intel");
+        cachedNpuInfo = { 
+          detected: true, 
+          vendor: isIntel ? "intel" : "unknown", 
+          name: output.split("\n")[0].trim() 
+        };
+      }
+    } catch (_) {}
+  }
+  // macOS: Apple Silicon Neural Engine is part of the SoC, not a separate NPU device
+  return cachedNpuInfo;
+}
+
+// ── GPU Layer Auto-Tuning ─────────────────────────────────────────────────────
+// Calculate optimal GPU layer count from free VRAM to prevent OOM
+function chooseAutoLayers(modelFilename, freeVramBytes, cacheTypeK = "q8_0", cacheTypeV = "q8_0") {
+  let modelSizeGb = 4;
+  let layerCount = 32;
+  
+  try {
+    const modelPath = path.join(LLM_MODELS, modelFilename);
+    if (fs.existsSync(modelPath)) {
+      const stats = fs.statSync(modelPath);
+      modelSizeGb = stats.size / (1024 * 1024 * 1024);
+    }
+  } catch (_) {}
+  
+  // Estimate layer count from model size (rough heuristic based on common architectures)
+  if (modelSizeGb < 2) layerCount = 24;      // Small models (1-2B)
+  else if (modelSizeGb < 4) layerCount = 32;   // Medium (3-4B)
+  else if (modelSizeGb < 8) layerCount = 40;   // Large (7-8B)
+  else if (modelSizeGb < 20) layerCount = 80;    // Very large (13-20B)
+  else if (modelSizeGb < 40) layerCount = 100;   // Huge (30-40B)
+  else layerCount = 120;                        // Massive (70B+)
+  
+  // Calculate approximate layer size
+  const layerSizeGb = modelSizeGb / layerCount;
+  
+  // Account for KV cache memory with quantization
+  // q8_0 = 0.5x, q4_0 = 0.25x of f16
+  const kvCacheMultiplier = (cacheTypeK === "q4_0" || cacheTypeV === "q4_0") ? 0.25 :
+                            (cacheTypeK === "q8_0" || cacheTypeV === "q8_0") ? 0.5 : 1.0;
+  
+  // Leave 15% VRAM headroom for KV cache + overhead + OS
+  const usableVram = freeVramBytes * 0.85;
+  const maxLayers = Math.floor(usableVram / (layerSizeGb * 1024 * 1024 * 1024));
+  
+  // Cap at total layers, return -1 if fits fully
+  if (maxLayers >= layerCount) return -1;  // All layers fit
+  return Math.max(0, maxLayers);
+}
+
 let nvidiaSmiCmd = "nvidia-smi";
 let hasNvidiaSmi = null;
 
@@ -636,6 +805,9 @@ function getHardwareSpecs() {
   const gpu = getGpuInfo();
   const ramTotalGb = roundGb(os.totalmem());
   const gpuVramGb = gpu.vram_gb || 0;
+  const physicalCores = getPhysicalCores();
+  const logicalCores = cpus.length;
+  const npuInfo = detectNpu();
 
   // Tiering logic
   let tier = "low";
@@ -666,6 +838,52 @@ function getHardwareSpecs() {
       tierReason = `GPU with ${gpuVramGb} GB VRAM and ${ramTotalGb} GB RAM.`;
     }
   }
+
+  // Recommended text settings per tier
+  const recommendedTextSettings = {
+    low: {
+      contextSize: 2048,
+      threads: Math.max(1, physicalCores),
+      gpuLayers: 0,
+      cacheTypeK: "q4_0",
+      cacheTypeV: "q4_0",
+      flashAttn: true,
+      mlock: true,
+      mmap: true,
+      cachePrompt: true,
+      batchSize: 256,
+      ubatchSize: 256,
+      performanceProfile: "potato",
+    },
+    mid: {
+      contextSize: 4096,
+      threads: Math.max(1, Math.floor(physicalCores / 2)),
+      gpuLayers: -1,
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      flashAttn: true,
+      mlock: false,
+      mmap: true,
+      cachePrompt: true,
+      batchSize: 512,
+      ubatchSize: 512,
+      performanceProfile: "balanced",
+    },
+    high: {
+      contextSize: 8192,
+      threads: Math.max(1, Math.floor(physicalCores / 2)),
+      gpuLayers: -1,
+      cacheTypeK: "q8_0",
+      cacheTypeV: "q8_0",
+      flashAttn: true,
+      mlock: false,
+      mmap: true,
+      cachePrompt: true,
+      batchSize: 1024,
+      ubatchSize: 1024,
+      performanceProfile: "high",
+    },
+  };
 
   // Recommended models catalog matching contract exactly
   let recommended_models = [];
@@ -731,12 +949,15 @@ function getHardwareSpecs() {
   return {
     os_name: `${os.type()} ${os.release()}`,
     cpu_name: cpus[0]?.model || "Unavailable",
-    cpu_cores_physical: Math.max(1, Math.round(cpus.length / 2)),
-    cpu_cores_logical: cpus.length || 1,
+    cpu_cores_physical: physicalCores,
+    cpu_cores_logical: logicalCores,
     ram_total_gb: ramTotalGb,
     gpu_name: gpu.name,
     gpu_vram_gb: gpuVramGb,
-    recommended_models
+    npu: npuInfo,
+    tier,
+    recommended_models,
+    recommended_text_settings: recommendedTextSettings[tier] || recommendedTextSettings.mid,
   };
 }
 
@@ -968,11 +1189,17 @@ function getLlmBackend() {
     if (fs.existsSync(LLM_BACKEND_PATHS.winCuda) && detectLlamaCudaGpu()) {
       return { path: LLM_BACKEND_PATHS.winCuda, mode: "Auto (CUDA/CPU)" };
     }
+    if (fs.existsSync(LLM_BACKEND_PATHS.winSycl) && detectLlamaSyclGpu()) {
+      return { path: LLM_BACKEND_PATHS.winSycl, mode: "Auto (SYCL/CPU)" };
+    }
     if (fs.existsSync(LLM_BACKEND_PATHS.winVulkan) && detectLlamaVulkanGpu()) {
       return { path: LLM_BACKEND_PATHS.winVulkan, mode: "Auto (Vulkan/CPU)" };
     }
     if (fs.existsSync(LLM_BACKEND_PATHS.winCuda)) {
       return { path: LLM_BACKEND_PATHS.winCuda, mode: "Auto (CUDA/CPU)" };
+    }
+    if (fs.existsSync(LLM_BACKEND_PATHS.winSycl)) {
+      return { path: LLM_BACKEND_PATHS.winSycl, mode: "Auto (SYCL/CPU)" };
     }
     if (fs.existsSync(LLM_BACKEND_PATHS.winVulkan)) {
       return { path: LLM_BACKEND_PATHS.winVulkan, mode: "Auto (Vulkan/CPU)" };
@@ -987,11 +1214,17 @@ function getLlmBackend() {
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxCuda) && detectLlamaCudaGpu()) {
       return { path: LLM_BACKEND_PATHS.linuxCuda, mode: "Auto (CUDA/CPU)" };
     }
+    if (fs.existsSync(LLM_BACKEND_PATHS.linuxSycl) && detectLlamaSyclGpu()) {
+      return { path: LLM_BACKEND_PATHS.linuxSycl, mode: "Auto (SYCL/CPU)" };
+    }
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxVulkan) && detectLlamaVulkanGpu()) {
       return { path: LLM_BACKEND_PATHS.linuxVulkan, mode: "Auto (Vulkan/CPU)" };
     }
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxCuda)) {
       return { path: LLM_BACKEND_PATHS.linuxCuda, mode: "Auto (CUDA/CPU)" };
+    }
+    if (fs.existsSync(LLM_BACKEND_PATHS.linuxSycl)) {
+      return { path: LLM_BACKEND_PATHS.linuxSycl, mode: "Auto (SYCL/CPU)" };
     }
     if (fs.existsSync(LLM_BACKEND_PATHS.linuxVulkan)) {
       return { path: LLM_BACKEND_PATHS.linuxVulkan, mode: "Auto (Vulkan/CPU)" };
@@ -2182,6 +2415,17 @@ async function startLlm(settings = {}) {
     backendBinary: path.basename(backend.path),
     enableThinking: settings.enableThinking !== false,
     supportsThinking: /deepseek|qwen3|gemma-4|gemma4|think|r1|e2b|reasoning/i.test(filename),
+    // New performance settings
+    flashAttn: settings.flashAttn !== false,
+    cacheTypeK: settings.cacheTypeK || llmSettings.cacheTypeK || "q8_0",
+    cacheTypeV: settings.cacheTypeV || llmSettings.cacheTypeV || "q8_0",
+    mlock: settings.mlock || llmSettings.mlock || false,
+    mmap: settings.mmap !== false && llmSettings.mmap !== false,
+    cachePrompt: settings.cachePrompt !== false && llmSettings.cachePrompt !== false,
+    defragThold: Number(settings.defragThold) || llmSettings.defragThold || 0.1,
+    batchSize: Math.max(128, Math.min(2048, Number(settings.batchSize) || llmSettings.batchSize || 512)),
+    ubatchSize: Math.max(128, Math.min(2048, Number(settings.ubatchSize) || llmSettings.ubatchSize || 512)),
+    performanceProfile: settings.performanceProfile || llmSettings.performanceProfile || "balanced",
   };
 
   let mmprojPath = null;
@@ -2260,11 +2504,38 @@ async function startLlm(settings = {}) {
     "--threads", String(llmSettings.threads),
     "--n-gpu-layers", String(llmSettings.gpuLayers),
     "--parallel", "1",
-    "--cache-ram", "0",
-    "--no-warmup",
+    "--flash-attn", "on",                     // ✅ Memory-efficient attention (all backends)
+    "--cache-type-k", String(llmSettings.cacheTypeK),   // ✅ KV cache quantization K
+    "--cache-type-v", String(llmSettings.cacheTypeV),   // ✅ KV cache quantization V
+    "--cache-prompt",                        // ✅ Prompt caching for multi-turn (major UX win)
+    "--ctx-checkpoints", "8",                // ✅ Context shifting recovery
+    "--poll", "30",                          // ✅ More aggressive polling
+    "--metrics",                             // ✅ Metrics endpoint for tuning
+    "--defrag-thold", String(llmSettings.defragThold),   // ✅ KV cache defragmentation
+    "--batch-size", String(llmSettings.batchSize),       // ✅ Prompt processing batch
+    "--ubatch-size", String(llmSettings.ubatchSize),     // ✅ Micro-batch size
   ];
+  
+  // CPU mode: lock memory to prevent OS paging (critical for consistent speed)
+  const isGpuMode = backend.mode.includes("GPU") || backend.mode.includes("CUDA") || 
+                    backend.mode.includes("Vulkan") || backend.mode.includes("Metal") || 
+                    backend.mode.includes("SYCL");
+  if (!isGpuMode && llmSettings.mlock) {
+    args.push("--mlock");                    // ✅ Prevent OS swapping on CPU
+  }
+  
+  // All modes: memory-mapped loading for faster startup
+  if (llmSettings.mmap) {
+    args.push("--mmap");                     // ✅ Faster model loading
+  }
+  
   if (llmSettings.enableThinking === false) {
-    args.push("--reasoning-format", "none");
+    args.push("--reasoning", "off");           // ✅ Disable reasoning/thinking completely
+  } else if (llmSettings.supportsThinking) {
+    args.push("--reasoning", "on");            // ✅ Enable reasoning for supported models
+  }
+  if (llmSettings.enableThinking !== false && llmSettings.supportsThinking) {
+    args.push("--reasoning-format", "deepseek"); // ✅ Extract thoughts into reasoning_content
   }
   if (mmprojPath) {
     args.push("--mmproj", mmprojPath);
@@ -2273,10 +2544,29 @@ async function startLlm(settings = {}) {
   llmSettings.mmproj = mmprojPath ? path.basename(mmprojPath) : null;
   const spawnEnv = { ...process.env };
   const backendDir = path.dirname(backend.path);
+  
+  // Platform library paths
   if (osPlatform === "linux") {
     spawnEnv.LD_LIBRARY_PATH = backendDir + (spawnEnv.LD_LIBRARY_PATH ? `:${spawnEnv.LD_LIBRARY_PATH}` : "");
   } else if (osPlatform === "darwin") {
     spawnEnv.DYLD_LIBRARY_PATH = backendDir + (spawnEnv.DYLD_LIBRARY_PATH ? `:${spawnEnv.DYLD_LIBRARY_PATH}` : "");
+  }
+  
+  // CUDA-specific optimizations
+  if (backend.mode.includes("CUDA")) {
+    // Multi-GPU: increase command buffer size (reduces CPU stalls)
+    spawnEnv.CUDA_SCALE_LAUNCH_QUEUES = spawnEnv.CUDA_SCALE_LAUNCH_QUEUES || "4x";
+    
+    // Linux: allow swapping to system RAM when VRAM exhausted
+    if (osPlatform === "linux") {
+      spawnEnv.GGML_CUDA_ENABLE_UNIFIED_MEMORY = spawnEnv.GGML_CUDA_ENABLE_UNIFIED_MEMORY || "1";
+    }
+  }
+  
+  // SYCL-specific optimizations (Intel Arc/Graphics)
+  if (backend.mode.includes("SYCL")) {
+    spawnEnv.GGML_SYCL_ENABLE_FLASH_ATTN = "1";
+    spawnEnv.ZES_ENABLE_SYSMAN = "1";
   }
 
   console.log("  [llm] Starting:", backend.path, args.join(" "));
@@ -2287,6 +2577,7 @@ async function startLlm(settings = {}) {
     process.stderr.write("  [llm-err] " + output);
     if (/Vulkan\d+\s*:/i.test(output)) llmSettings.backendMode = "Vulkan GPU";
     else if (/CUDA\d+\s*:/i.test(output)) llmSettings.backendMode = "CUDA GPU";
+    else if (/SYCL\d+\s*:/i.test(output)) llmSettings.backendMode = "SYCL GPU";
     else if (/Metal/i.test(output) && /GPU|device/i.test(output)) llmSettings.backendMode = "Metal GPU";
     else if (/\-\s+CPU\s+:/i.test(output) && llmSettings.backendMode.startsWith("Auto")) llmSettings.backendMode = "CPU";
     if (/error|failed/i.test(output) && !/no error/i.test(output)) {
@@ -3459,8 +3750,17 @@ async function doLlmChat(req, res, body, retryCount = 0) {
       model: llmSettings.model || "local-model",
       messages: Array.isArray(body.messages) ? body.messages : [],
       temperature: Number.isFinite(Number(body.temperature)) ? Number(body.temperature) : 0.7,
-      max_tokens: Math.max(1, Math.min(4096, Number(body.max_tokens) || 512)),
+      max_tokens: Math.max(1, Math.min(4096, Number(body.max_tokens) || Number(body.maxTokens) || 1024)),
       stream: isStream,
+      // New sampling parameters
+      top_p: Number.isFinite(Number(body.top_p)) ? Number(body.top_p) : 0.95,
+      top_k: Number.isFinite(Number(body.top_k)) ? Number(body.top_k) : 40,
+      min_p: Number.isFinite(Number(body.min_p)) ? Number(body.min_p) : 0.05,
+      repeat_penalty: Number.isFinite(Number(body.repeat_penalty)) ? Number(body.repeat_penalty) : 1.1,
+      frequency_penalty: Number.isFinite(Number(body.frequency_penalty)) ? Number(body.frequency_penalty) : 0.0,
+      presence_penalty: Number.isFinite(Number(body.presence_penalty)) ? Number(body.presence_penalty) : 0.0,
+      seed: Number.isInteger(Number(body.seed)) ? Number(body.seed) : undefined,
+      stop: Array.isArray(body.stop) ? body.stop : (body.stop ? [body.stop] : undefined),
     });
 
     if (isStream) {
@@ -3472,7 +3772,8 @@ async function doLlmChat(req, res, body, retryCount = 0) {
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(requestData),
-        }
+        },
+        agent: llmHttpAgent,  // ✅ HTTP keep-alive: eliminates TCP handshake per turn
       }, (clientRes) => {
         if (clientRes.statusCode < 200 || clientRes.statusCode >= 300) {
           let errorBody = "";
@@ -3556,12 +3857,86 @@ async function doLlmChat(req, res, body, retryCount = 0) {
   }
 }
 
+// ── llmfit Integration ──────────────────────────────────────────────────────────
+let cachedLlmfitResults = new Map();
+
+function getHardwareHash() {
+  const cpus = os.cpus();
+  const gpu = getGpuInfo();
+  const ram = os.totalmem();
+  return `${cpus.length}-${cpus[0]?.model || 'unknown'}-${gpu.name}-${ram}`;
+}
+
+async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
+  const hardwareHash = getHardwareHash();
+  const cacheKey = `${hardwareHash}:${useCase}:${limit}`;
+  
+  const cached = cachedLlmfitResults.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp) < 3600000) { // 1 hour cache
+    return cached.data;
+  }
+  
+  // Try to find llmfit binary
+  const llmfitPaths = [
+    path.join(ROOT, "app", "tools", "llmfit", osPlatform === "win32" ? "llmfit.exe" : "llmfit"),
+    "llmfit", // PATH
+  ];
+  
+  let llmfitPath = null;
+  for (const p of llmfitPaths) {
+    try {
+      if (fs.existsSync(p)) {
+        llmfitPath = p;
+        break;
+      }
+      if (osPlatform !== "win32") {
+        const whichResult = spawnSync("which", [p], { stdio: "ignore" });
+        if (whichResult.status === 0) {
+          llmfitPath = p;
+          break;
+        }
+      }
+    } catch (_) {}
+  }
+  
+  if (!llmfitPath) return null; // Fallback to tier table
+  
+  try {
+    const result = spawnSync(llmfitPath, [
+      "recommend", "--json", "--limit", String(limit),
+      "--use-case", useCase, "--force-runtime", "llamacpp"
+    ], {
+      encoding: "utf8",
+      timeout: 8000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    });
+    
+    if (result.status !== 0) return null;
+    
+    const data = JSON.parse(result.stdout);
+    cachedLlmfitResults.set(cacheKey, { timestamp: Date.now(), data });
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
   if (req.url === "/api/llm/chat" && req.method === "POST") {
     const body = await readJsonBody(req, res);
     if (!body) return;
     if (!llmReady) return json(res, 409, { ok: false, error: "Load a text model before sending a message." });
     await doLlmChat(req, res, body);
     return;
+  }
+
+  // GET /api/llm/recommend — llmfit recommendations
+  if (req.url.startsWith("/api/llm/recommend") && req.method === "GET") {
+    const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    const useCase = url.searchParams.get("useCase") || "chat";
+    const limit = Math.min(20, Math.max(1, Number(url.searchParams.get("limit")) || 10));
+    const recommendations = await getLlmfitRecommendations(useCase, limit);
+    return json(res, 200, { ok: true, recommendations, source: recommendations ? "llmfit" : "fallback" });
   }
 
   // GET /api/hardware-specs

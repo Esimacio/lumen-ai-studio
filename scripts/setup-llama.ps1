@@ -1,4 +1,4 @@
-param([string]$Release = "b9631")
+param([string]$Release = "b9668")
 
 $ErrorActionPreference = "Stop"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -158,6 +158,19 @@ if (-not $hasNvidia) {
 
 if ($hasNvidia) {
     Install-LlamaArchive -Variant "cuda" -AssetName "llama-$Release-bin-win-cuda-12.4-x64.zip"
+}
+# Intel Arc/Graphics detection for SYCL backend
+$hasIntel = $false
+try {
+    $gpus = Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue
+    foreach ($gpu in $gpus) {
+        if ($gpu.Name -like "*Intel*") {
+            $hasIntel = $true
+        }
+    }
+} catch {}
+if ($hasIntel) {
+    Install-LlamaArchive -Variant "sycl" -AssetName "llama-$Release-bin-win-sycl-x64.zip"
 }
 Install-LlamaArchive -Variant "vulkan" -AssetName "llama-$Release-bin-win-vulkan-x64.zip"
 Install-LlamaArchive -Variant "cpu" -AssetName "llama-$Release-bin-win-cpu-x64.zip"
