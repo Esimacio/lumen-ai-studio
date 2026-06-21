@@ -122,7 +122,8 @@ function App() {
         return {
           ...parsed,
           enableThinking: parsed.enableThinking === true,
-          maxTokens: parsed.maxTokens || 384,
+          maxTokens: !parsed.maxTokens || parsed.maxTokens === 384 ? 1024 : parsed.maxTokens,
+          responseTokenMode: parsed.responseTokenMode || "auto",
         };
       } catch (_) {}
     }
@@ -134,7 +135,8 @@ function App() {
       enableThinking: false,
       // New performance settings
       gpuLayers: -1,
-      maxTokens: 384,
+      maxTokens: 1024,
+      responseTokenMode: "auto",
       topP: 0.95,
       topK: 40,
       minP: 0.05,
@@ -167,9 +169,41 @@ function App() {
     if (saved) {
       try {
         setConversations(JSON.parse(saved));
-      } catch (_) {}
+      } catch (_) {
+        localStorage.removeItem("chat_conversations");
+      }
     }
   }, []);
+
+  const sanitizeMessageForStorage = (message) => {
+    if (!Array.isArray(message?.content)) return message;
+    return {
+      ...message,
+      content: message.content.map((item) => {
+        if (item?.type !== "image_url") return item;
+        return {
+          type: "text",
+          text: "[Attached image omitted from saved chat history]",
+        };
+      }),
+    };
+  };
+
+  const sanitizeConversationForStorage = (conversation) => ({
+    ...conversation,
+    messages: Array.isArray(conversation.messages)
+      ? conversation.messages.map(sanitizeMessageForStorage)
+      : [],
+  });
+
+  const persistConversations = (list) => {
+    const compactList = list.map(sanitizeConversationForStorage);
+    try {
+      localStorage.setItem("chat_conversations", JSON.stringify(compactList));
+    } catch (err) {
+      console.warn("Could not save chat history:", err);
+    }
+  };
 
   const saveConversationState = useCallback((id, msgs, modelName, newTitle = null) => {
     setConversations((prev) => {
@@ -192,7 +226,7 @@ function App() {
           timestamp: Date.now()
         });
       }
-      localStorage.setItem("chat_conversations", JSON.stringify(list));
+      persistConversations(list);
       return list;
     });
   }, []);
@@ -201,7 +235,7 @@ function App() {
     if (e) e.stopPropagation();
     setConversations((prev) => {
       const filtered = prev.filter((c) => c.id !== id);
-      localStorage.setItem("chat_conversations", JSON.stringify(filtered));
+      persistConversations(filtered);
       return filtered;
     });
     if (activeConversationId === id) {

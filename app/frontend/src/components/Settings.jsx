@@ -232,7 +232,7 @@ function Settings({
 
   const buildTextStartOptions = (settings) => ({
     threads: settings?.threads || specs?.cpu_cores_physical || 4,
-    contextSize: settings?.contextSize || 4096,
+    contextSize: settings?.contextSize ?? 0,
     gpuLayers: settings?.gpuLayers ?? -1,
     enableThinking: settings?.enableThinking !== false,
     flashAttn: settings?.flashAttn,
@@ -685,17 +685,37 @@ function Settings({
               <div className="m3-slider-group">
                 <div className="m3-slider-header">
                   <span className="m3-slider-label">Max Response Tokens</span>
-                  <span className="settings-value-badge">{textSettings.maxTokens || 384}</span>
+                  <span className="settings-value-badge">
+                    {(textSettings.responseTokenMode || "auto") === "auto" ? "Auto" : (textSettings.maxTokens || 1024)}
+                  </span>
+                </div>
+                <div className="m3-segmented-button" style={{ marginBottom: "10px" }}>
+                  {[
+                    { id: "auto", label: "Auto" },
+                    { id: "manual", label: "Manual" },
+                  ].map((mode) => (
+                    <button
+                      key={mode.id}
+                      className={`m3-segment-item ${(textSettings.responseTokenMode || "auto") === mode.id ? "active" : ""}`}
+                      onClick={() => updateTextSetting("responseTokenMode", mode.id)}
+                    >
+                      {mode.label}
+                    </button>
+                  ))}
                 </div>
                 <input
                   type="range"
                   className="m3-slider"
-                  value={textSettings.maxTokens || 384}
+                  value={textSettings.maxTokens || 1024}
                   onChange={(e) => updateTextSetting("maxTokens", parseInt(e.target.value))}
                   min="64"
-                  max="2048"
+                  max="4096"
                   step="64"
+                  disabled={(textSettings.responseTokenMode || "auto") === "auto"}
                 />
+                <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)" }}>
+                  Auto uses remaining context with a safety buffer. Manual uses the slider value.
+                </span>
               </div>
 
               <div className="m3-slider-group">

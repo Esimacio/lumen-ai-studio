@@ -54,6 +54,7 @@ export function normalizeModel(model) {
     format: model?.format || "Local Weights File",
     backendType: model?.backendType || "",
     resolution: model?.resolution || "",
+    isProjector: Boolean(model?.isProjector),
   };
 }
 

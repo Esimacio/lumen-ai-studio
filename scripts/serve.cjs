@@ -129,8 +129,10 @@ let openvinoModel = null;
 let openvinoWidth = null;
 let openvinoHeight = null;
 let llmProc = null;
+let llmProcSeq = 0;
 let llmReady = false;
 let llmError = null;
+let llmOperationQueue = Promise.resolve();
 let llmSettings = {
   model: null,
   threads: Math.max(1, Math.min(16, os.cpus().length || 4)),
@@ -152,6 +154,12 @@ let llmSettings = {
   ubatchSize: 512,
   performanceProfile: "balanced",
 };
+
+function runExclusiveLlmOperation(operation) {
+  const run = llmOperationQueue.catch(() => {}).then(operation);
+  llmOperationQueue = run.catch(() => {});
+  return run;
+}
 let backendLoadState = {
   active: false,
   phase: "",
@@ -1254,6 +1262,16 @@ function checkPort(port) {
   });
 }
 
+async function waitForPortAvailable(port, timeoutMs = 5000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const status = await checkPort(port);
+    if (status.available) return true;
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return false;
+}
+
 async function findAvailableBackendPort() {
   const preferred = await checkPort(PREFERRED_BACKEND_PORT);
   if (preferred.available) return PREFERRED_BACKEND_PORT;
@@ -1285,69 +1303,62 @@ async function findAvailableLlmPort() {
 }
 
 function getLlmBackend() {
+  return getLlmBackendCandidates()[0] || null;
+}
+
+function getLlmBackendCandidates() {
+  const candidates = [];
+  const includeUndetectedGpu = process.env.LOCALAI_LLM_TRY_UNDETECTED_GPU === "1";
+  const add = (key, backendPath, mode, detected = true) => {
+    if (!backendPath || !fs.existsSync(backendPath)) return;
+    if (key !== "cpu" && !detected && !includeUndetectedGpu) return;
+    if (candidates.some((item) => item.path === backendPath)) return;
+    candidates.push({ key, path: backendPath, mode, detected });
+  };
+
   if (osPlatform === "win32") {
-    if (fs.existsSync(LLM_BACKEND_PATHS.winCuda) && detectLlamaCudaGpu()) {
-      return { path: LLM_BACKEND_PATHS.winCuda, mode: "Auto (CUDA/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.winVulkan) && detectLlamaVulkanGpu()) {
-      return { path: LLM_BACKEND_PATHS.winVulkan, mode: "Auto (Vulkan/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.winSycl) && detectLlamaSyclGpu()) {
-      return { path: LLM_BACKEND_PATHS.winSycl, mode: "Auto (SYCL/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.winCuda)) {
-      return { path: LLM_BACKEND_PATHS.winCuda, mode: "Auto (CUDA/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.winVulkan)) {
-      return { path: LLM_BACKEND_PATHS.winVulkan, mode: "Auto (Vulkan/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.winSycl)) {
-      return { path: LLM_BACKEND_PATHS.winSycl, mode: "Auto (SYCL/CPU)" };
-    }
-    return { path: LLM_BACKEND_PATHS.winCpu, mode: "CPU" };
+    add("cuda", LLM_BACKEND_PATHS.winCuda, "Auto (CUDA/CPU)", Boolean(detectLlamaCudaGpu()));
+    add("vulkan", LLM_BACKEND_PATHS.winVulkan, "Auto (Vulkan/CPU)", Boolean(detectLlamaVulkanGpu()));
+    add("sycl", LLM_BACKEND_PATHS.winSycl, "Auto (SYCL/CPU)", Boolean(detectLlamaSyclGpu()));
+    add("cpu", LLM_BACKEND_PATHS.winCpu, "CPU", true);
   } else if (osPlatform === "darwin") {
-    return {
-      path: process.arch === "arm64" ? LLM_BACKEND_PATHS.macArm64 : LLM_BACKEND_PATHS.macX64,
-      mode: process.arch === "arm64" ? "Metal GPU" : "CPU",
-    };
+    add("metal", process.arch === "arm64" ? LLM_BACKEND_PATHS.macArm64 : LLM_BACKEND_PATHS.macX64, process.arch === "arm64" ? "Metal GPU" : "CPU", true);
   } else {
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxCuda) && detectLlamaCudaGpu()) {
-      return { path: LLM_BACKEND_PATHS.linuxCuda, mode: "Auto (CUDA/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxSycl) && detectLlamaSyclGpu()) {
-      return { path: LLM_BACKEND_PATHS.linuxSycl, mode: "Auto (SYCL/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxVulkan) && detectLlamaVulkanGpu()) {
-      return { path: LLM_BACKEND_PATHS.linuxVulkan, mode: "Auto (Vulkan/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxCuda)) {
-      return { path: LLM_BACKEND_PATHS.linuxCuda, mode: "Auto (CUDA/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxSycl)) {
-      return { path: LLM_BACKEND_PATHS.linuxSycl, mode: "Auto (SYCL/CPU)" };
-    }
-    if (fs.existsSync(LLM_BACKEND_PATHS.linuxVulkan)) {
-      return { path: LLM_BACKEND_PATHS.linuxVulkan, mode: "Auto (Vulkan/CPU)" };
-    }
-    return { path: LLM_BACKEND_PATHS.linuxCpu, mode: "CPU" };
+    add("cuda", LLM_BACKEND_PATHS.linuxCuda, "Auto (CUDA/CPU)", Boolean(detectLlamaCudaGpu()));
+    add("sycl", LLM_BACKEND_PATHS.linuxSycl, "Auto (SYCL/CPU)", Boolean(detectLlamaSyclGpu()));
+    add("vulkan", LLM_BACKEND_PATHS.linuxVulkan, "Auto (Vulkan/CPU)", Boolean(detectLlamaVulkanGpu()));
+    add("cpu", LLM_BACKEND_PATHS.linuxCpu, "CPU", true);
   }
+
+  const priority = osPlatform === "win32"
+    ? { cuda: 0, vulkan: 1, sycl: 2, metal: 3, cpu: 9 }
+    : osPlatform === "darwin"
+      ? { metal: 0, cpu: 9 }
+      : { cuda: 0, sycl: 1, vulkan: 2, cpu: 9 };
+
+  return candidates.sort((a, b) => {
+    if (a.key === "cpu" && b.key !== "cpu") return 1;
+    if (b.key === "cpu" && a.key !== "cpu") return -1;
+    const detectedDelta = Number(b.detected) - Number(a.detected);
+    if (detectedDelta) return detectedDelta;
+    return (priority[a.key] ?? 8) - (priority[b.key] ?? 8);
+  });
 }
 
 function getLlmModels() {
   try {
     return fs.readdirSync(LLM_MODELS)
-      .filter((filename) => {
-        const lower = filename.toLowerCase();
-        return lower.endsWith(".gguf") && !lower.includes("mmproj");
-      })
+      .filter((filename) => filename.toLowerCase().endsWith(".gguf"))
       .map((filename) => {
         const stats = fs.statSync(path.join(LLM_MODELS, filename));
+        const lower = filename.toLowerCase();
         return {
           filename,
           name: filename,
           sizeBytes: stats.size,
           size: formatBytes(stats.size),
           format: "GGUF",
+          isProjector: lower.includes("mmproj"),
         };
       });
   } catch (_) {
@@ -1355,11 +1366,35 @@ function getLlmModels() {
   }
 }
 
-function pingLlmReady() {
+function pingLlmReady(expectedModel = "") {
   return new Promise((resolve) => {
     const req = http.get(`http://127.0.0.1:${PORT_LLM}/v1/models`, (res) => {
-      res.resume();
-      resolve(res.statusCode >= 200 && res.statusCode < 500);
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => {
+        if (res.statusCode < 200 || res.statusCode >= 500) {
+          resolve(false);
+          return;
+        }
+        if (!expectedModel) {
+          resolve(true);
+          return;
+        }
+        try {
+          const parsed = JSON.parse(body || "{}");
+          const servedIds = Array.isArray(parsed.data)
+            ? parsed.data.map((item) => String(item.id || item.model || ""))
+            : [];
+          const expectedBase = path.basename(expectedModel).toLowerCase();
+          resolve(servedIds.some((id) => {
+            const lower = id.toLowerCase();
+            return lower === expectedBase || lower.includes(expectedBase);
+          }));
+        } catch (_) {
+          resolve(false);
+        }
+      });
     });
     req.setTimeout(1000, () => {
       req.destroy();
@@ -1369,37 +1404,64 @@ function pingLlmReady() {
   });
 }
 
-async function waitForLlmReady(maxAttempts = 240) {
+async function waitForLlmReady(maxAttempts = 240, expectedProc = llmProc, expectedModel = "") {
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    if (!llmProc) throw new Error(llmError || "llama.cpp exited during startup.");
-    if (await pingLlmReady()) {
+    if (!expectedProc || llmProc !== expectedProc) throw new Error(llmError || "llama.cpp exited during startup.");
+    if (await pingLlmReady(expectedModel)) {
       llmReady = true;
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error("llama.cpp did not become ready within 2 minutes.");
+  throw new Error(`llama.cpp did not become ready within ${Math.round(maxAttempts / 120)} minutes.`);
 }
 
-function killLlm() {
+function waitForChildExit(proc, timeoutMs) {
   return new Promise((resolve) => {
-    llmReady = false;
-    llmSettings.supportsVision = false;
-    llmSettings.visionMode = "none";
-    llmSettings.visionStatus = "Projector not loaded";
-    llmSettings.mmproj = null;
-    if (!llmProc) {
-      resolve();
+    if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
+      resolve(true);
       return;
     }
-    const proc = llmProc;
-    llmProc = null;
-    try { proc.kill("SIGTERM"); } catch (_) {}
-    setTimeout(() => {
-      try { proc.kill("SIGKILL"); } catch (_) {}
-      resolve();
-    }, 1200);
+    let done = false;
+    const finish = (exited) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      proc.off("exit", onExit);
+      resolve(exited);
+    };
+    const onExit = () => finish(true);
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    proc.once("exit", onExit);
   });
+}
+
+async function killLlm() {
+  llmReady = false;
+  llmSettings.supportsVision = false;
+  llmSettings.visionMode = "none";
+  llmSettings.visionStatus = "Projector not loaded";
+  llmSettings.mmproj = null;
+  if (!llmProc) {
+    await waitForPortAvailable(PORT_LLM, 1500);
+    return;
+  }
+
+  const proc = llmProc;
+  const procPort = PORT_LLM;
+  llmProc = null;
+
+  try { proc.kill("SIGTERM"); } catch (_) {}
+  const exitedAfterTerm = await waitForChildExit(proc, 2500);
+  if (!exitedAfterTerm) {
+    try { proc.kill("SIGKILL"); } catch (_) {}
+    await waitForChildExit(proc, 2500);
+  }
+
+  const released = await waitForPortAvailable(procPort, 5000);
+  if (!released) {
+    console.warn(`  [llm] Port ${procPort} is still busy after stopping llama.cpp.`);
+  }
 }
 
 function getSetupPaths() {
@@ -2055,6 +2117,28 @@ function selectGgufFile(siblings = [], tier = "low") {
   return files[0] || "";
 }
 
+function selectMmprojFile(siblings = [], modelFilename = "") {
+  const files = siblings
+    .map((item) => typeof item === "string" ? item : item?.rfilename)
+    .filter((name) => name && /\.gguf$/i.test(name))
+    .filter((name) => /(?:^|[-_/])mmproj(?:[-_.\/]|$)|mmproj/i.test(name));
+  if (files.length === 0) return "";
+
+  const modelBase = path.basename(modelFilename).toLowerCase();
+  const modelStem = modelBase.replace(/\.gguf$/i, "").replace(/\.(q\d(?:_k_[ms])?|iq\d_[a-z0-9]+|bf16|f16|f32)$/i, "");
+  const scored = files.map((name) => {
+    const lower = name.toLowerCase();
+    let score = 0;
+    if (/bf16/i.test(lower)) score += 6;
+    if (/f16/i.test(lower)) score += 5;
+    if (/mmproj-model-f16/i.test(lower)) score += 4;
+    if (modelStem && lower.includes(modelStem)) score += 10;
+    return { name, score };
+  });
+  scored.sort((a, b) => b.score - a.score || a.name.length - b.name.length);
+  return scored[0]?.name || "";
+}
+
 function classifyHuggingFaceModel(model, filename) {
   const searchable = `${model.id || ""} ${filename || ""} ${(model.tags || []).join(" ")}`.toLowerCase();
   const parameters = getModelParameterBillions(searchable);
@@ -2179,6 +2263,7 @@ async function searchHuggingFaceModels(query, filters) {
     if (model.private || model.gated || model.disabled) continue;
     const filename = selectGgufFile(model.siblings, tier);
     if (!filename) continue;
+    const projectorFilename = selectMmprojFile(model.siblings, filename);
     const traits = classifyHuggingFaceModel(model, filename);
     if (filters.includes("vision") && !traits.vision) continue;
     if (filters.includes("uncensored") && !traits.uncensored) continue;
@@ -2206,6 +2291,8 @@ async function searchHuggingFaceModels(query, filters) {
       resolution: "N/A",
       notes: `Community GGUF from ${String(model.id || "").split("/")[0]}. ${Number(model.downloads || 0).toLocaleString()} Hugging Face downloads.`,
       url: `https://huggingface.co/${model.id}/resolve/main/${filename.split("/").map(encodeURIComponent).join("/")}`,
+      projectorUrl: projectorFilename ? `https://huggingface.co/${model.id}/resolve/main/${projectorFilename.split("/").map(encodeURIComponent).join("/")}` : "",
+      projectorFilename: projectorFilename ? `${model.id.replace(/\//g, "--")}--${path.basename(projectorFilename)}` : "",
       pageUrl: `https://huggingface.co/${model.id}`,
       downloads: Number(model.downloads || 0),
       likes: Number(model.likes || 0),
@@ -2478,6 +2565,29 @@ function chooseAutoContext(modelFilename, isGpu) {
   return 2048;
 }
 
+function buildLlmLoadProfiles(settings = {}, backend = {}) {
+  const requestedContext = Number(settings.contextSize);
+  const safeContext = requestedContext && requestedContext > 0
+    ? Math.max(512, Math.min(4096, requestedContext))
+    : 4096;
+  const isCpu = backend.key === "cpu" || backend.mode === "CPU";
+  const profiles = [
+    { name: "requested", gpuLayers: isCpu ? 0 : undefined },
+    {
+      name: "safe",
+      contextSize: safeContext,
+      gpuLayers: isCpu ? 0 : 0,
+      flashAttn: false,
+      cacheTypeK: "q4_0",
+      cacheTypeV: "q4_0",
+      batchSize: 256,
+      ubatchSize: 256,
+      enableThinking: false,
+    },
+  ];
+  return profiles;
+}
+
 async function startLlm(settings = {}) {
   const filename = path.basename(String(settings.model || ""));
   const modelPath = path.join(LLM_MODELS, filename);
@@ -2488,7 +2598,47 @@ async function startLlm(settings = {}) {
     throw new Error("Text generation requires a .gguf model.");
   }
 
-  const backend = getLlmBackend();
+  const candidates = getLlmBackendCandidates();
+  if (candidates.length === 0) {
+    throw new Error("llama.cpp is not installed. Run the platform setup script to install the text backend.");
+  }
+
+  const failures = [];
+  for (const backend of candidates) {
+    for (const profile of buildLlmLoadProfiles(settings, backend)) {
+      try {
+        await startLlmWithBackend({ ...settings, __loadProfile: profile }, backend);
+        llmSettings.backendFallbacks = failures;
+        return;
+      } catch (err) {
+        const message = err.message || String(err);
+        failures.push({
+          backend: backend.mode,
+          binary: path.basename(backend.path),
+          profile: profile.name,
+          error: message.slice(-500),
+        });
+        console.warn(`  [llm] Load failed on ${backend.mode} (${profile.name}): ${message}`);
+        await killLlm();
+      }
+    }
+  }
+
+  const last = failures[failures.length - 1];
+  llmSettings.backendFallbacks = failures;
+  throw new Error(`Text model failed on all available llama.cpp backends. Last failure: ${last?.error || "unknown error"}`);
+}
+
+async function startLlmWithBackend(settings = {}, backend) {
+  const filename = path.basename(String(settings.model || ""));
+  const modelPath = path.join(LLM_MODELS, filename);
+  if (!filename || !pathInside(modelPath, LLM_MODELS) || !fs.existsSync(modelPath)) {
+    throw new Error("Select a downloaded GGUF text model first.");
+  }
+  if (!filename.toLowerCase().endsWith(".gguf")) {
+    throw new Error("Text generation requires a .gguf model.");
+  }
+
   if (!backend) {
     throw new Error("llama.cpp is not installed. Run the platform setup script to install the text backend.");
   }
@@ -2499,7 +2649,8 @@ async function startLlm(settings = {}) {
   PORT_LLM = await findAvailableLlmPort();
   llmError = null;
 
-  let contextSize = Number(settings.contextSize);
+  const loadProfile = settings.__loadProfile || {};
+  let contextSize = Number(loadProfile.contextSize ?? settings.contextSize);
   if (!contextSize || contextSize <= 0) {
     const isGpu = backend.mode.includes("GPU") || backend.mode.includes("CUDA") || backend.mode.includes("Vulkan") || backend.mode.includes("Metal") || backend.mode.startsWith("Auto");
     contextSize = chooseAutoContext(filename, isGpu);
@@ -2509,14 +2660,14 @@ async function startLlm(settings = {}) {
   }
 
   const isSyclBackend = backend.mode.includes("SYCL") || path.basename(path.dirname(backend.path)).toLowerCase() === "sycl";
-  const requestedGpuLayers = Number.isFinite(Number(settings.gpuLayers)) ? Number(settings.gpuLayers) : -1;
+  const requestedGpuLayers = Number.isFinite(Number(loadProfile.gpuLayers ?? settings.gpuLayers)) ? Number(loadProfile.gpuLayers ?? settings.gpuLayers) : -1;
   const effectiveGpuLayers = isSyclBackend ? getStableSyclGpuLayers(filename, requestedGpuLayers) : requestedGpuLayers;
-  const effectiveFlashAttn = isSyclBackend ? false : settings.flashAttn !== false;
-  const effectiveCacheTypeK = isSyclBackend ? "q4_0" : settings.cacheTypeK || llmSettings.cacheTypeK || "q8_0";
-  const effectiveCacheTypeV = isSyclBackend ? "q4_0" : settings.cacheTypeV || llmSettings.cacheTypeV || "q8_0";
-  const effectiveBatchSize = isSyclBackend ? Math.min(256, Number(settings.batchSize) || llmSettings.batchSize || 512) : Number(settings.batchSize) || llmSettings.batchSize || 512;
-  const effectiveUbatchSize = isSyclBackend ? Math.min(256, Number(settings.ubatchSize) || llmSettings.ubatchSize || 512) : Number(settings.ubatchSize) || llmSettings.ubatchSize || 512;
-  const effectiveEnableThinking = isSyclBackend && effectiveGpuLayers === 0 ? false : settings.enableThinking !== false;
+  const effectiveFlashAttn = isSyclBackend ? false : (loadProfile.flashAttn ?? (settings.flashAttn !== false));
+  const effectiveCacheTypeK = isSyclBackend ? "q4_0" : loadProfile.cacheTypeK || settings.cacheTypeK || llmSettings.cacheTypeK || "q8_0";
+  const effectiveCacheTypeV = isSyclBackend ? "q4_0" : loadProfile.cacheTypeV || settings.cacheTypeV || llmSettings.cacheTypeV || "q8_0";
+  const effectiveBatchSize = isSyclBackend ? Math.min(256, Number(loadProfile.batchSize ?? settings.batchSize) || llmSettings.batchSize || 512) : Number(loadProfile.batchSize ?? settings.batchSize) || llmSettings.batchSize || 512;
+  const effectiveUbatchSize = isSyclBackend ? Math.min(256, Number(loadProfile.ubatchSize ?? settings.ubatchSize) || llmSettings.ubatchSize || 512) : Number(loadProfile.ubatchSize ?? settings.ubatchSize) || llmSettings.ubatchSize || 512;
+  const effectiveEnableThinking = isSyclBackend && effectiveGpuLayers === 0 ? false : (loadProfile.enableThinking ?? (settings.enableThinking !== false));
 
   llmSettings = {
     ...llmSettings,
@@ -2527,6 +2678,7 @@ async function startLlm(settings = {}) {
     requestedGpuLayers,
     backendMode: backend.mode,
     backendBinary: path.basename(backend.path),
+    loadProfile: loadProfile.name || "requested",
     enableThinking: effectiveEnableThinking,
     supportsThinking: /deepseek|qwen3|gemma-4|gemma4|think|r1|e2b|reasoning/i.test(filename),
     // New performance settings
@@ -2692,9 +2844,15 @@ async function startLlm(settings = {}) {
   }
 
   console.log("  [llm] Starting:", backend.path, args.join(" "));
-  llmProc = spawn(backend.path, args, { stdio: "pipe", env: spawnEnv });
-  llmProc.stdout.on("data", (data) => process.stdout.write("  [llm] " + data.toString()));
-  llmProc.stderr.on("data", (data) => {
+  const proc = spawn(backend.path, args, { stdio: "pipe", env: spawnEnv });
+  const procSeq = ++llmProcSeq;
+  llmProc = proc;
+  proc.stdout.on("data", (data) => {
+    if (llmProc !== proc) return;
+    process.stdout.write("  [llm] " + data.toString());
+  });
+  proc.stderr.on("data", (data) => {
+    if (llmProc !== proc) return;
     const output = data.toString();
     process.stderr.write("  [llm-err] " + output);
     if (/Vulkan\d+\s*:/i.test(output)) llmSettings.backendMode = "Vulkan GPU";
@@ -2706,14 +2864,18 @@ async function startLlm(settings = {}) {
       llmError = output.trim().slice(-1200);
     }
   });
-  llmProc.on("exit", (code) => {
+  proc.on("exit", (code) => {
+    if (llmProc !== proc) {
+      console.log("  [llm] stale process exited with code", code);
+      return;
+    }
     llmReady = false;
     llmProc = null;
     if (code !== 0 && code !== null && !llmError) llmError = `llama.cpp exited with code ${code}`;
-    console.log("  [llm] exited with code", code);
+    console.log("  [llm] exited with code", code, `(process ${procSeq})`);
   });
 
-  await waitForLlmReady();
+  await waitForLlmReady(backend.key === "cpu" ? 720 : 360, proc, filename);
 }
 
 async function startBackend(settings = {}) {
@@ -3155,7 +3317,11 @@ function startModelDownload(url, overrideFilename = null, targetDir = MODELS, ki
     kind,
   };
 
-  console.log(`  [download] Starting download of ${filename} from ${url}`);
+  if (redirectCount > 0) {
+    console.log(`  [download] Continuing redirected download of ${filename}`);
+  } else {
+    console.log(`  [download] Starting download of ${filename} from ${url}`);
+  }
 
   let downloadFinalized = false;
   const failDownload = (message, err = null) => {
@@ -3198,16 +3364,17 @@ function startModelDownload(url, overrideFilename = null, targetDir = MODELS, ki
         failDownload("Too many redirects");
         return;
       }
-      console.log(`  [download] Redirected to ${redirectUrl}`);
+      console.log(`  [download] Following redirect for ${filename}`);
+      downloadState.speed = "Following redirect";
       
       // Clean up redirected request to avoid triggering error handlers later
       request.removeAllListeners("error");
       request.destroy();
+      response.resume();
       
       fileStream.close();
       try { fs.unlinkSync(tempPath); } catch (_) {}
       activeDownload = null;
-      downloadState.active = false;
       startModelDownload(redirectUrl, filename, targetDir, kind, redirectCount + 1);
       return;
     }
@@ -3818,17 +3985,17 @@ const server = http.createServer(async (req, res) => {
     const body = await readJsonBody(req, res);
     if (!body) return;
     try {
-      await startLlm(body);
+      await runExclusiveLlmOperation(() => startLlm(body));
       return json(res, 200, { ok: true, ready: llmReady, port: PORT_LLM, settings: llmSettings });
     } catch (err) {
       llmError = err.message || String(err);
-      await killLlm();
+      await runExclusiveLlmOperation(() => killLlm());
       return json(res, 500, { ok: false, error: llmError });
     }
   }
 
   if (req.url === "/api/llm/stop" && req.method === "POST") {
-    await killLlm();
+    await runExclusiveLlmOperation(() => killLlm());
     return json(res, 200, { ok: true });
   }
 
@@ -3862,7 +4029,7 @@ async function retryLowerContext() {
     enableThinking: llmSettings.enableThinking,
   };
   
-  await startLlm(newSettings);
+  await runExclusiveLlmOperation(() => startLlm(newSettings));
 }
 
 async function doLlmChat(req, res, body, retryCount = 0) {

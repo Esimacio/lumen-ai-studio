@@ -14,6 +14,7 @@ set LLM_VULKAN_BACKEND=%APP%\llm-backend\win\vulkan\llama-server.exe
 set LLM_CPU_BACKEND=%APP%\llm-backend\win\cpu\llama-server.exe
 set SERVE=%~dp0scripts\serve.cjs
 if "%FRONTEND_PORT%"=="" set FRONTEND_PORT=1420
+if "%LLM_PORT%"=="" set LLM_PORT=10086
 set SETUP_REASON=
 set SETUP_MODE=Repair
 
@@ -60,6 +61,7 @@ pause >nul
 :: Clear old frontend and backend server processes before setup so app/tools/node-win can be replaced
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%FRONTEND_PORT% "') do taskkill /f /pid %%a >nul 2>nul
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8080 "') do taskkill /f /pid %%a >nul 2>nul
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%LLM_PORT% "') do taskkill /f /pid %%a >nul 2>nul
 
 powershell -ExecutionPolicy Bypass -File "%SETUP%"
 if errorlevel 1 (
@@ -81,9 +83,10 @@ echo  ============================================================
 echo.
 
 :: Clear frontend and backend ports to prevent address conflicts.
-echo  Clearing frontend port %FRONTEND_PORT% and backend port 8080...
+echo  Clearing frontend port %FRONTEND_PORT%, backend port 8080, and text port %LLM_PORT%...
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%FRONTEND_PORT% "') do taskkill /f /pid %%a >nul 2>nul
 for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8080 "') do taskkill /f /pid %%a >nul 2>nul
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":%LLM_PORT% "') do taskkill /f /pid %%a >nul 2>nul
 
 :: Start frontend server + backend manager (serve.cjs manages sd-vulkan.exe)
 echo  Starting Local AI Image Generator...
@@ -95,7 +98,7 @@ echo  ============================================================
 echo   Running!
 echo   Web UI:     http://localhost:%FRONTEND_PORT%
 echo   GPU API:    Auto-selected by the app (starts at 8080)
-echo   Text API:   Starts when a GGUF model is loaded (port 10086)
+echo   Text API:   Starts when a GGUF model is loaded (port %LLM_PORT%)
 echo.
 echo   Press Ctrl+C in this window to stop all services.
 echo  ============================================================

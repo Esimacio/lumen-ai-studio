@@ -249,6 +249,7 @@ function ModelManager({
   const [hasMoreModels, setHasMoreModels] = useState(false);
   const [isLoadingMoreModels, setIsLoadingMoreModels] = useState(false);
   const searchRequestRef = React.useRef(0);
+  const pendingCompanionDownloadRef = React.useRef(null);
 
   const cancelLoadRef = React.useRef(false);
   
@@ -261,7 +262,10 @@ function ModelManager({
     }
   };
 
-  const modelNames = localModels.map((model) => normalizeModel(model).filename);
+  const normalizedLocalModels = localModels.map(normalizeModel).filter((model) => model.filename);
+  const displayedLocalModels = normalizedLocalModels.filter((model) => !model.isProjector);
+  const allModelNames = normalizedLocalModels.map((model) => model.filename);
+  const modelNames = displayedLocalModels.map((model) => model.filename);
   const isBusy = loadingModelId !== null || isUnloading;
   
   const openvinoSupported = Boolean(backendOptions?.openvinoNpu?.supported);
@@ -430,10 +434,10 @@ function ModelManager({
     }
   };
 
-  const downloadByUrl = async (url, expectedFilename) => {
+  const downloadByUrl = async (url, expectedFilename, companion = null, options = {}) => {
     if (downloadingModelId) return;
 
-    if (modelNames.includes(expectedFilename)) {
+    if (!options.skipExistingConfirm && allModelNames.includes(expectedFilename)) {
       if (!(await showConfirm({
         title: "Overwrite Model?",
         message: `"${expectedFilename}" is already downloaded. Do you want to download and overwrite it?`,
@@ -452,6 +456,7 @@ function ModelManager({
     }
 
     try {
+      pendingCompanionDownloadRef.current = companion;
       let res;
       if (activeModelType === "image") {
         res = await downloadModel(url);
@@ -461,9 +466,11 @@ function ModelManager({
       if (res && res.ok) {
         startProgressPolling(expectedFilename);
       } else {
+        pendingCompanionDownloadRef.current = null;
         showAlert({ title: "Download Failed", message: res.error || "Unknown error", danger: true });
       }
     } catch (err) {
+      pendingCompanionDownloadRef.current = null;
       showAlert({ title: "Download Error", message: err.message, danger: true });
     }
   };
@@ -486,11 +493,15 @@ function ModelManager({
             }
           } else {
             fetchModels();
-            if (modelId === "ggml-model-q4_k.gguf") {
+            const companion = pendingCompanionDownloadRef.current;
+            pendingCompanionDownloadRef.current = null;
+            if (companion?.url && companion?.filename && !allModelNames.includes(companion.filename)) {
               setTimeout(() => {
                 downloadByUrl(
-                  "https://huggingface.co/mys/ggml_llava-v1.5-7b/resolve/main/mmproj-model-f16.gguf",
-                  "mmproj-model-f16.gguf"
+                  companion.url,
+                  companion.filename,
+                  null,
+                  { skipExistingConfirm: true }
                 );
               }, 500);
             }
@@ -538,13 +549,35 @@ function ModelManager({
       return;
     }
 
+    const hasMainModel = modelNames.includes(model.filename);
+    const hasProjector = !model.projectorFilename || allModelNames.includes(model.projectorFilename);
+    if (hasMainModel && model.projectorUrl && model.projectorFilename && !hasProjector) {
+      const confirmed = await showConfirm({
+        title: "Download Vision Projector?",
+        message: `"${model.name}" is downloaded, but image input needs the matching projector file (${model.projectorFilename}). Download it now?`,
+        confirmLabel: "Download Projector",
+      });
+      if (confirmed) {
+        await downloadByUrl(model.projectorUrl, model.projectorFilename, null, { skipExistingConfirm: true });
+      }
+      return;
+    }
+
     const confirmed = await showConfirm({
       title: "Download Model?",
-      message: `Download "${model.name}" (~${model.approxSize})?`,
+      message: model.projectorUrl
+        ? `Download "${model.name}" (~${model.approxSize}) and its required vision projector?`
+        : `Download "${model.name}" (~${model.approxSize})?`,
       confirmLabel: "Download",
     });
     if (confirmed) {
-      await downloadByUrl(model.url, model.filename);
+      await downloadByUrl(
+        model.url,
+        model.filename,
+        model.projectorUrl && model.projectorFilename
+          ? { url: model.projectorUrl, filename: model.projectorFilename }
+          : null
+      );
     }
   };
 
@@ -627,7 +660,7 @@ function ModelManager({
           device: "",
         });
         const cores = textSettings?.threads || specs?.cpu_cores_physical || 4;
-        const context = textSettings?.contextSize || 4096;
+        const context = textSettings?.contextSize ?? 0;
         const res = await startLlm(modelId, {
           threads: cores,
           contextSize: context,
@@ -1066,7 +1099,7 @@ function ModelManager({
       <div className="m3-card" style={{ marginTop: "24px" }}>
         <h3 className="m3-card-title">
           <Database size={18} style={{ color: "var(--md-sys-color-primary)" }} />
-          Local {activeModelType === "image" ? "Image" : "Text"} Models ({localModels.length})
+          Local {activeModelType === "image" ? "Image" : "Text"} Models ({displayedLocalModels.length})
         </h3>
         
         {isLoadingModels ? (
@@ -1074,7 +1107,7 @@ function ModelManager({
             <RefreshCw className="progress-spinner" size={16} />
             <span style={{ fontSize: "0.9rem" }}>Scanning models folder...</span>
           </div>
-        ) : localModels.length === 0 ? (
+        ) : displayedLocalModels.length === 0 ? (
           <p style={{ fontSize: "0.9rem", color: "var(--md-sys-color-outline)", textAlign: "center", padding: "16px 0" }}>
             {activeModelType === "image" 
               ? "No image models detected in app/models/. Download from the library below or import a file."
@@ -1082,7 +1115,7 @@ function ModelManager({
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
-            {localModels.map((model) => {
+            {displayedLocalModels.map((model) => {
               const filename = model.filename;
               const isActive = activeModelType === "image" ? activeModel === filename : activeLlmModel === filename;
               
@@ -1221,8 +1254,11 @@ function ModelManager({
             <h4 style={{ fontWeight: 700, marginBottom: "12px" }}>{section.group}</h4>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "12px" }}>
               {section.items.map((model) => {
-                const installed = modelNames.includes(model.filename);
-                const downloading = downloadingModelId === model.filename || downloadingModelId === `${model.filename}.zip`;
+                const hasMainModel = modelNames.includes(model.filename);
+                const hasProjector = !model.projectorFilename || allModelNames.includes(model.projectorFilename);
+                const needsProjector = Boolean(hasMainModel && model.projectorFilename && !hasProjector);
+                const installed = hasMainModel && hasProjector;
+                const downloading = downloadingModelId === model.filename || downloadingModelId === model.projectorFilename || downloadingModelId === `${model.filename}.zip`;
                 const systemTier = getHardwareTier(specs);
                 const isRecommended = typeof model.recommendedFit === "boolean"
                   ? model.recommendedFit
@@ -1289,7 +1325,7 @@ function ModelManager({
                       disabled={installed || downloadingModelId !== null}
                     >
                       {installed ? <HardDrive size={14} /> : downloading ? <RefreshCw className="progress-spinner" size={14} /> : <DownloadCloud size={14} />}
-                      <span>{installed ? "Downloaded" : downloading ? "Downloading" : "Download"}</span>
+                      <span>{installed ? "Downloaded" : downloading ? "Downloading" : needsProjector ? "Download Vision File" : "Download"}</span>
                     </button>
                     <a
                       href={model.pageUrl || model.url}

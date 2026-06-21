@@ -30,6 +30,7 @@ SETUP_SCRIPT="$SCRIPT_DIR/scripts/setup.sh"
 SERVE_SCRIPT="$SCRIPT_DIR/scripts/serve.cjs"
 
 FRONTEND_PORT="${FRONTEND_PORT:-1420}"
+LLM_PORT="${LLM_PORT:-10086}"
 SETUP_REASON=""
 SETUP_MODE="Repair"
 
@@ -129,10 +130,11 @@ if [[ -n "$SETUP_REASON" ]]; then
 
   # Clear any existing frontend and backend server processes
   if command -v lsof >/dev/null 2>&1; then
-    lsof -t -i:"${FRONTEND_PORT}" -i:8080 | xargs kill -9 >/dev/null 2>&1 || true
+    lsof -t -i:"${FRONTEND_PORT}" -i:8080 -i:"${LLM_PORT}" | xargs kill -9 >/dev/null 2>&1 || true
   elif command -v fuser >/dev/null 2>&1; then
     fuser -k "${FRONTEND_PORT}/tcp" >/dev/null 2>&1 || true
     fuser -k "8080/tcp" >/dev/null 2>&1 || true
+    fuser -k "${LLM_PORT}/tcp" >/dev/null 2>&1 || true
   fi
 
   if ! bash "$SETUP_SCRIPT"; then
@@ -153,10 +155,11 @@ echo ""
 
 # Clear frontend and backend ports
 if command -v lsof >/dev/null 2>&1; then
-  lsof -t -i:"${FRONTEND_PORT}" -i:8080 | xargs kill -9 >/dev/null 2>&1 || true
+  lsof -t -i:"${FRONTEND_PORT}" -i:8080 -i:"${LLM_PORT}" | xargs kill -9 >/dev/null 2>&1 || true
 elif command -v fuser >/dev/null 2>&1; then
   fuser -k "${FRONTEND_PORT}/tcp" >/dev/null 2>&1 || true
   fuser -k "8080/tcp" >/dev/null 2>&1 || true
+  fuser -k "${LLM_PORT}/tcp" >/dev/null 2>&1 || true
 fi
 
 # Start the server
@@ -184,7 +187,7 @@ echo "  ============================================================"
 echo "   Running!"
 echo "   Web UI:     http://localhost:${FRONTEND_PORT}"
 echo "   GPU API:    Auto-selected by the app (starts at 8080)"
-echo "   Text API:   Starts when a GGUF model is loaded (port 10086)"
+echo "   Text API:   Starts when a GGUF model is loaded (port ${LLM_PORT})"
 echo ""
 echo "   Press Ctrl+C in this window to stop all services."
 echo "  ============================================================"

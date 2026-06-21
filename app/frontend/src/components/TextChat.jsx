@@ -150,6 +150,17 @@ function TextChat({
     const wordCount = value.split(/\s+/).filter(Boolean).length;
     return Math.max(wordCount, Math.ceil(value.length / 4));
   };
+
+  const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+
+  const getAutoMaxResponseTokens = (promptTokens, thinkingEnabled) => {
+    const contextLimit = Number(status.settings?.contextSize || textSettings?.contextSize || 4096);
+    const safetyBuffer = thinkingEnabled ? 768 : 512;
+    const preferredMinimum = thinkingEnabled ? 512 : 256;
+    const available = contextLimit - promptTokens - safetyBuffer;
+    if (available <= 0) return 64;
+    return clamp(available, Math.min(preferredMinimum, available), 4096);
+  };
   
   const bottomRef = useRef(null);
   const textareaRef = useRef(null);
@@ -192,14 +203,45 @@ function TextChat({
     return /\.(txt|md|csv|js|jsx|ts|tsx|py|json|css|html|java|cpp|c|h|rs|go|sh|bat|xml|yaml|yml)$/i.test(file.name) || file.type.startsWith("text/");
   };
 
+  const optimizeImageForVision = (file, maxSide = 1024, quality = 0.92) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.onload = () => {
+      const originalDataUrl = reader.result;
+      const img = new Image();
+      img.onerror = () => reject(new Error(`Could not decode ${file.name}`));
+      img.onload = () => {
+        const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        const sendDataUrl = canvas.toDataURL("image/jpeg", quality);
+        resolve({
+          previewDataUrl: originalDataUrl,
+          sendDataUrl,
+          originalWidth: img.width,
+          originalHeight: img.height,
+          width,
+          height,
+        });
+      };
+      img.src = originalDataUrl;
+    };
+    reader.readAsDataURL(file);
+  });
+
   const handleFileChange = (e) => {
     const files = Array.from(e.target.files);
     if (!files || files.length === 0) return;
 
     files.forEach((file) => {
       if (isImage(file)) {
-        const reader = new FileReader();
-        reader.onload = (event) => {
+        optimizeImageForVision(file)
+          .then((image) => {
           setAttachments((prev) => [
             ...prev,
             {
@@ -207,11 +249,18 @@ function TextChat({
               file,
               type: "image",
               name: file.name,
-              dataUrl: event.target.result,
+                dataUrl: image.previewDataUrl,
+                sendDataUrl: image.sendDataUrl,
+                width: image.width,
+                height: image.height,
+                originalWidth: image.originalWidth,
+                originalHeight: image.originalHeight,
             },
           ]);
-        };
-        reader.readAsDataURL(file);
+          })
+          .catch((err) => {
+            showAlert({ title: "Image Error", message: err.message || String(err), danger: true });
+          });
       } else if (isTextFile(file)) {
         const reader = new FileReader();
         reader.onload = (event) => {
@@ -279,7 +328,7 @@ function TextChat({
 
   const buildTextStartOptions = (settings) => ({
     threads: settings?.threads || specs?.cpu_cores_physical || 4,
-    contextSize: settings?.contextSize || 4096,
+    contextSize: settings?.contextSize ?? 0,
     gpuLayers: settings?.gpuLayers ?? -1,
     enableThinking: settings?.enableThinking !== false,
     flashAttn: settings?.flashAttn,
@@ -360,13 +409,14 @@ function TextChat({
 
   const refresh = useCallback(async () => {
     const [nextModels, nextStatus] = await Promise.all([listLlmModels(), getLlmStatus()]);
-    setModels(nextModels);
+    const selectableModels = nextModels.filter((model) => !model.isProjector);
+    setModels(selectableModels);
     setStatus(nextStatus);
     const active = nextStatus.settings?.model;
     setSelectedModel((current) => {
       const saved = localStorage.getItem("selectedLlmModel");
-      const savedExists = nextModels.some((m) => m.filename === saved);
-      return active || current || (savedExists ? saved : "") || nextModels[0]?.filename || "";
+      const savedExists = selectableModels.some((m) => m.filename === saved);
+      return active || current || (savedExists ? saved : "") || selectableModels[0]?.filename || "";
     });
   }, []);
 
@@ -453,7 +503,7 @@ function TextChat({
 
       const result = await startLlm(filename, {
         threads: textSettings?.threads || specs?.cpu_cores_physical || 4,
-        contextSize: textSettings?.contextSize || 4096,
+        contextSize: textSettings?.contextSize ?? 0,
         gpuLayers: textSettings?.gpuLayers ?? -1,
         enableThinking: textSettings?.enableThinking !== false,
         flashAttn: textSettings?.flashAttn,
@@ -512,15 +562,29 @@ function TextChat({
       documentContext += `\n[Attached File: ${att.name}]\n${att.content}\n`;
     });
 
-    const combinedText = documentContext ? `${text}\n\n${documentContext}`.trim() : text;
     const imageAttachments = attachments.filter(att => att.type === "image");
+    const visionInstruction = imageAttachments.length > 0
+      ? "For attached images: answer in natural language, describe the actual image content, and read visible text carefully when relevant. Do not output raw JSON, bounding boxes, OCR layout objects, or detection labels unless the user explicitly asks for that format."
+      : "";
+    const requestText = imageAttachments.length > 0
+      ? (text && text !== "?" ? text : "Describe what is visible in the image.")
+      : text;
+    const displayText = text || (imageAttachments.length > 0 ? "Describe what is visible in the image." : "");
+    const requestCombinedText = [
+      requestText,
+      documentContext,
+    ].filter(Boolean).join("\n\n").trim();
+    const displayCombinedText = documentContext
+      ? [displayText, documentContext].filter(Boolean).join("\n\n").trim()
+      : displayText;
 
     let userMessageContent;
+    let requestUserMessageContent;
     if (imageAttachments.length > 0) {
       userMessageContent = [
         {
           type: "text",
-          text: combinedText
+          text: displayCombinedText
         },
         ...imageAttachments.map((img) => ({
           type: "image_url",
@@ -529,11 +593,25 @@ function TextChat({
           }
         }))
       ];
+      requestUserMessageContent = [
+        {
+          type: "text",
+          text: requestCombinedText
+        },
+        ...imageAttachments.map((img) => ({
+          type: "image_url",
+          image_url: {
+            url: img.sendDataUrl || img.dataUrl
+          }
+        }))
+      ];
     } else {
-      userMessageContent = combinedText;
+      userMessageContent = displayCombinedText;
+      requestUserMessageContent = requestCombinedText;
     }
 
     const nextMessages = [...messages, { role: "user", content: userMessageContent }];
+    const requestConversationMessages = [...messages, { role: "user", content: requestUserMessageContent }];
     followGenerationRef.current = true;
     setMessages(nextMessages);
     setInput("");
@@ -547,7 +625,7 @@ function TextChat({
     setMessages([...nextMessages, {
       role: "assistant",
       content: "",
-      generationStats: { status: "starting", tokens: 0, tokensPerSecond: 0, seconds: 0 },
+      generationStats: { status: "starting", tokens: 0, tokensPerSecond: 0, seconds: 0, vision: imageAttachments.length > 0 },
     }]);
 
     const controller = new AbortController();
@@ -555,9 +633,13 @@ function TextChat({
 
     try {
       const systemPrompt = textSettings?.systemPrompt || "You are a helpful local AI assistant.";
+      const combinedSystemPrompt = [
+        systemPrompt.trim(),
+        visionInstruction,
+      ].filter(Boolean).join("\n\n");
       const requestMessages = [
-        ...(systemPrompt.trim() ? [{ role: "system", content: systemPrompt.trim() }] : []),
-        ...nextMessages,
+        ...(combinedSystemPrompt ? [{ role: "system", content: combinedSystemPrompt }] : []),
+        ...requestConversationMessages,
       ];
       const promptTokenEstimate = requestMessages.reduce((sum, message) => {
         const messageText = Array.isArray(message.content)
@@ -579,10 +661,11 @@ function TextChat({
       let thinkingEndedAt = null;
       let thinkingDuration = 0;
 
-      const baseMaxTokens = textSettings?.maxTokens || 384;
-      const effectiveMaxTokens = textSettings?.enableThinking !== false
-        ? Math.max(baseMaxTokens, 1024)
-        : baseMaxTokens;
+      const thinkingEnabled = textSettings?.enableThinking !== false;
+      const manualMaxTokens = textSettings?.maxTokens || 1024;
+      const effectiveMaxTokens = textSettings?.responseTokenMode === "manual"
+        ? (thinkingEnabled ? Math.max(manualMaxTokens, 1024) : manualMaxTokens)
+        : getAutoMaxResponseTokens(promptTokenEstimate, thinkingEnabled);
 
       const response = await streamChatWithLlm(requestMessages, {
         temperature: textSettings?.temperature || 0.7,
@@ -592,7 +675,7 @@ function TextChat({
         minP: textSettings?.minP,
         repeatPenalty: textSettings?.repeatPenalty,
         seed: textSettings?.seed,
-        enableThinking: textSettings?.enableThinking !== false,
+        enableThinking: thinkingEnabled,
         signal: controller.signal,
       }, (_token, fullText, _reasoningToken, fullReasoning) => {
         const now = performance.now();
@@ -929,6 +1012,9 @@ function TextChat({
                 );
                 const displayContent = Array.isArray(message.content) ? message.content : processed.content;
                 const displayReasoning = processed.reasoning;
+                const hasDisplayContent = Array.isArray(displayContent)
+                  ? displayContent.length > 0
+                  : Boolean(String(displayContent || "").trim());
 
                 return (
                   <div
@@ -952,35 +1038,37 @@ function TextChat({
                           isComplete={!message.generationStats || message.generationStats.status === "complete"}
                         />
                       )}
-                      <div className={`chat-bubble ${message.error ? "error" : ""}`}>
-                        {Array.isArray(displayContent) ? (
-                          <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                            {displayContent.map((item, idx) => {
-                              if (item.type === "text") return <MarkdownRenderer key={idx} content={item.text} />;
-                              if (item.type === "image_url") return (
-                                <img key={idx} src={item.image_url.url} alt="Attached image"
-                                  style={{ maxWidth: "240px", maxHeight: "180px", objectFit: "contain", borderRadius: "8px", marginTop: "4px" }}
-                                />
-                              );
-                              return null;
-                            })}
-                          </div>
-                        ) : (
-                          <MarkdownRenderer content={displayContent} />
-                        )}
-                      </div>
+                      {(hasDisplayContent || message.error) && (
+                        <div className={`chat-bubble ${message.error ? "error" : ""}`}>
+                          {Array.isArray(displayContent) ? (
+                            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+                              {displayContent.map((item, idx) => {
+                                if (item.type === "text") return <MarkdownRenderer key={idx} content={item.text} />;
+                                if (item.type === "image_url") return (
+                                  <img key={idx} src={item.image_url.url} alt="Attached image"
+                                    style={{ maxWidth: "240px", maxHeight: "180px", objectFit: "contain", borderRadius: "8px", marginTop: "4px" }}
+                                  />
+                                );
+                                return null;
+                              })}
+                            </div>
+                          ) : (
+                            <MarkdownRenderer content={displayContent} />
+                          )}
+                        </div>
+                      )}
 
                       {/* Generation stats pill */}
                       {message.role === "assistant" && message.generationStats && !message.error && (
                         <>
                           {message.generationStats.truncated && (
                             <div className="chat-generation-warning">
-                              Response reached the token limit. Increase Max Response Tokens or ask "continue".
+                              Response reached the token limit. Ask "continue" or switch Max Response Tokens to Manual for a larger cap.
                             </div>
                           )}
                           <div className={`chat-generation-stats ${message.generationStats.status}`}>
                           {message.generationStats.status === "starting" ? (
-                            <><LoaderCircle size={11} className="progress-spinner" /> Waiting for first token...</>
+                            <><LoaderCircle size={11} className="progress-spinner" /> {message.generationStats.vision ? "Processing image..." : "Waiting for first token..."}</>
                           ) : message.generationStats.status === "streaming" ? (
                             <><span style={{ opacity: 0.7 }}>⚡</span> {message.generationStats.tokensPerSecond.toFixed(1)} tok/s</>
                           ) : (
