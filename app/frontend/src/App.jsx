@@ -5,7 +5,8 @@ import Generator from "./components/Generator";
 import ModelManager from "./components/ModelManager";
 import Settings from "./components/Settings";
 import TextChat from "./components/TextChat";
-import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, stopServer } from "./services/api";
+import SpeechTranscriber from "./components/SpeechTranscriber";
+import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, getHardwareSpecs, getHealth, getTelemetry, getBackendOptions, getBackendStatus, listGeneratedOutputs, listSpeechTranscriptions, stopServer } from "./services/api";
 import "./App.css";
 
 function App() {
@@ -163,6 +164,9 @@ function App() {
   const [conversations, setConversations] = useState([]);
   const [activeConversationId, setActiveConversationId] = useState(null);
   const [showHistory, setShowHistory] = useState(false); // Default hide
+  const [speechTranscriptions, setSpeechTranscriptions] = useState([]);
+  const [selectedSpeechTranscript, setSelectedSpeechTranscript] = useState(null);
+  const [showSpeechHistory, setShowSpeechHistory] = useState(false);
 
   useEffect(() => {
     const saved = localStorage.getItem("chat_conversations");
@@ -242,6 +246,20 @@ function App() {
       setActiveConversationId(null);
     }
   }, [activeConversationId]);
+
+  const refreshSpeechTranscriptions = useCallback(async () => {
+    try {
+      const list = await listSpeechTranscriptions();
+      setSpeechTranscriptions(list);
+    } catch (err) {
+      console.warn("Could not load speech transcriptions:", err);
+      setSpeechTranscriptions([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshSpeechTranscriptions();
+  }, [refreshSpeechTranscriptions]);
 
   // Load hardware specifications on mount
   useEffect(() => {
@@ -487,8 +505,13 @@ function App() {
       showHistory={showHistory}
       setShowHistory={setShowHistory}
       onDeleteConversation={handleDeleteConversation}
+      speechTranscriptions={speechTranscriptions}
+      selectedSpeechTranscript={selectedSpeechTranscript}
+      setSelectedSpeechTranscript={setSelectedSpeechTranscript}
+      showSpeechHistory={showSpeechHistory}
+      setShowSpeechHistory={setShowSpeechHistory}
     />
-  ), [activeTab, specs, conversations, activeConversationId, showHistory, handleDeleteConversation]);
+  ), [activeTab, specs, conversations, activeConversationId, showHistory, handleDeleteConversation, speechTranscriptions, selectedSpeechTranscript, showSpeechHistory]);
 
   const handleStopServer = useCallback(async () => {
     if (!serverRunning || isStoppingServer) return;
@@ -581,6 +604,15 @@ function App() {
             showHistory={showHistory}
             setShowHistory={setShowHistory}
             saveConversationState={saveConversationState}
+          />
+        </div>
+
+        <div style={{ display: activeTab === "speech" ? "flex" : "none", flex: 1, flexDirection: "column", overflow: "hidden" }}>
+          <SpeechTranscriber
+            showAlert={showAlert}
+            showConfirm={showConfirm}
+            selectedTranscript={selectedSpeechTranscript}
+            onTranscriptionsChanged={refreshSpeechTranscriptions}
           />
         </div>
 

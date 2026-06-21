@@ -570,6 +570,89 @@ export async function deleteLlmModel(filename) {
   return await readJsonResponse(res, "The local server returned an invalid text model delete response.");
 }
 
+export async function getSpeechStatus() {
+  try {
+    const res = await fetch("/api/speech/status");
+    return await readJsonResponse(res, "The local server returned invalid speech backend status.");
+  } catch (err) {
+    return { ready: false, running: false, backendInstalled: false, error: err.message, settings: {} };
+  }
+}
+
+export async function listSpeechModels() {
+  const res = await fetch("/api/speech/models");
+  const data = await readJsonResponse(res, "The local server returned invalid speech model data.");
+  return data.models || [];
+}
+
+export async function startSpeech(model, options = {}) {
+  const res = await fetch("/api/speech/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      language: options.language || "auto",
+      threads: options.threads,
+    }),
+  });
+  return await readJsonResponse(res, "The local server returned an invalid speech start response.");
+}
+
+export async function stopSpeech() {
+  const res = await fetch("/api/speech/stop", { method: "POST" });
+  return await readJsonResponse(res, "The local server returned an invalid speech stop response.");
+}
+
+export async function transcribeSpeech(fileOrBlob, options = {}) {
+  const params = new URLSearchParams();
+  if (options.model) params.set("model", options.model);
+  if (options.language) params.set("language", options.language);
+  if (options.filename) params.set("filename", options.filename);
+  if (options.threads) params.set("threads", String(options.threads));
+
+  const res = await fetch(`/api/speech/transcribe?${params.toString()}`, {
+    method: "POST",
+    headers: { "Content-Type": "audio/wav" },
+    body: fileOrBlob,
+    signal: options.signal,
+  });
+  const data = await readJsonResponse(res, "The local server returned an invalid transcription response.");
+  return data.transcription;
+}
+
+export async function downloadSpeechModel(modelIdOrUrl, filename = null) {
+  const isUrl = /^https?:\/\//i.test(String(modelIdOrUrl || ""));
+  const res = await fetch("/api/speech/download-model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: isUrl ? "" : modelIdOrUrl,
+      url: isUrl ? modelIdOrUrl : "",
+      filename,
+    }),
+  });
+  return await readJsonResponse(res, "The local server returned an invalid speech download response.");
+}
+
+export async function importSpeechModel(file, onProgress, signal) {
+  return await uploadModelFileToEndpoint(file, "/api/speech/import-model", onProgress, signal);
+}
+
+export async function deleteSpeechModel(filename) {
+  const res = await fetch("/api/speech/delete-model", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename }),
+  });
+  return await readJsonResponse(res, "The local server returned an invalid speech model delete response.");
+}
+
+export async function listSpeechTranscriptions() {
+  const res = await fetch("/api/speech/transcriptions");
+  const data = await readJsonResponse(res, "The local server returned invalid transcription history.");
+  return data.transcriptions || [];
+}
+
 export async function getLlmRecommendations(useCase = "chat", limit = 10) {
   try {
     const res = await fetch(`/api/llm/recommend?useCase=${encodeURIComponent(useCase)}&limit=${limit}`);

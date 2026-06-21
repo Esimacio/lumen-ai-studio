@@ -32,6 +32,13 @@ if (Test-Path $llmBackendDir) {
     Remove-Item $llmBackendDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+# Delete whisper.cpp backend
+$speechBackendDir = Join-Path $appDir "speech-backend"
+if (Test-Path $speechBackendDir) {
+    Write-Host "   >> Removing whisper.cpp speech backend binaries..." -ForegroundColor Cyan
+    Remove-Item $speechBackendDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # Delete dist
 $distDir = Join-Path $appDir "dist"
 if (Test-Path $distDir) {
@@ -49,6 +56,18 @@ if (Test-Path $modelsDir) {
 $llmModelsDir = Join-Path $appDir "llm-models"
 if (Test-Path $llmModelsDir) {
     Write-Host "   >> Preserving text models in app/llm-models." -ForegroundColor Cyan
+}
+
+# Preserve speech models
+$speechModelsDir = Join-Path $appDir "speech-models"
+if (Test-Path $speechModelsDir) {
+    Write-Host "   >> Preserving speech models in app/speech-models." -ForegroundColor Cyan
+}
+
+# Preserve transcriptions
+$transcriptionsDir = Join-Path $appDir "transcriptions"
+if (Test-Path $transcriptionsDir) {
+    Write-Host "   >> Preserving speech transcripts in app/transcriptions." -ForegroundColor Cyan
 }
 
 # Preserve OpenVINO models
@@ -82,7 +101,7 @@ if (Test-Path $lockFile) {
 
 Write-Host ""
 Write-Host "  ============================================================" -ForegroundColor Green
-Write-Host "   Reset complete. Image models, text models, OpenVINO models, and generated outputs were preserved." -ForegroundColor Green
+Write-Host "   Reset complete. Image models, text models, speech models, transcripts, OpenVINO models, and generated outputs were preserved." -ForegroundColor Green
 Write-Host "  ============================================================" -ForegroundColor Green
 Write-Host ""
 Read-Host "  Press Enter to close..."

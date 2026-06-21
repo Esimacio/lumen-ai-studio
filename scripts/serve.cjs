@@ -30,8 +30,10 @@ function readPort(value, fallback) {
 const PORT_FRONTEND = readPort(process.env.PORT || process.env.FRONTEND_PORT, 1420);
 const PREFERRED_BACKEND_PORT = readPort(process.env.BACKEND_PORT || process.env.SD_BACKEND_PORT, 8080);
 const PREFERRED_LLM_PORT = readPort(process.env.LLM_PORT, 10086);
+const PREFERRED_SPEECH_PORT = readPort(process.env.SPEECH_PORT, 10088);
 let PORT_BACKEND = PREFERRED_BACKEND_PORT;
 let PORT_LLM = PREFERRED_LLM_PORT;
+let PORT_SPEECH = PREFERRED_SPEECH_PORT;
 const MAX_JSON_BODY_BYTES = 64 * 1024 * 1024;
 const SERVER_BUILD = "text-image-v1";
 const ROOT    = path.join(__dirname, "..");
@@ -105,6 +107,34 @@ const LLM_BENCHMARK_PATH = path.join(LLM_CONFIG_DIR, "llm-benchmarks.json");
 if (!fs.existsSync(LLM_CONFIG_DIR)) {
   fs.mkdirSync(LLM_CONFIG_DIR, { recursive: true });
 }
+const SPEECH_MODELS = path.join(ROOT, "app", "speech-models");
+if (!fs.existsSync(SPEECH_MODELS)) {
+  fs.mkdirSync(SPEECH_MODELS, { recursive: true });
+}
+const TRANSCRIPTIONS = path.join(ROOT, "app", "transcriptions");
+if (!fs.existsSync(TRANSCRIPTIONS)) {
+  fs.mkdirSync(TRANSCRIPTIONS, { recursive: true });
+}
+const SPEECH_BACKEND_PATHS = {
+  winCli: path.join(ROOT, "app", "speech-backend", "win", "whisper-cli.exe"),
+  winServer: path.join(ROOT, "app", "speech-backend", "win", "whisper-server.exe"),
+  linuxCli: path.join(ROOT, "app", "speech-backend", "linux", "whisper-cli"),
+  linuxServer: path.join(ROOT, "app", "speech-backend", "linux", "whisper-server"),
+  macCli: path.join(ROOT, "app", "speech-backend", "mac", "whisper-cli"),
+  macServer: path.join(ROOT, "app", "speech-backend", "mac", "whisper-server"),
+};
+const SPEECH_MODEL_CATALOG = [
+  { id: "tiny.en", name: "Whisper Tiny English", filename: "ggml-tiny.en.bin", size: "75 MB", language: "English", recommended: false },
+  { id: "tiny.en-q5_1", name: "Whisper Tiny English Q5", filename: "ggml-tiny.en-q5_1.bin", size: "31 MB", language: "English", recommended: false },
+  { id: "base.en", name: "Whisper Base English", filename: "ggml-base.en.bin", size: "142 MB", language: "English", recommended: true },
+  { id: "base.en-q5_1", name: "Whisper Base English Q5", filename: "ggml-base.en-q5_1.bin", size: "57 MB", language: "English", recommended: true },
+  { id: "small.en", name: "Whisper Small English", filename: "ggml-small.en.bin", size: "466 MB", language: "English", recommended: false },
+  { id: "small.en-q5_1", name: "Whisper Small English Q5", filename: "ggml-small.en-q5_1.bin", size: "181 MB", language: "English", recommended: false },
+  { id: "tiny", name: "Whisper Tiny Multilingual", filename: "ggml-tiny.bin", size: "75 MB", language: "Multilingual", recommended: false },
+  { id: "base", name: "Whisper Base Multilingual", filename: "ggml-base.bin", size: "142 MB", language: "Multilingual", recommended: false },
+  { id: "base-q5_1", name: "Whisper Base Multilingual Q5", filename: "ggml-base-q5_1.bin", size: "57 MB", language: "Multilingual", recommended: false },
+  { id: "small", name: "Whisper Small Multilingual", filename: "ggml-small.bin", size: "466 MB", language: "Multilingual", recommended: false },
+];
 const OPENVINO_MODELS = path.join(ROOT, "app", "openvino-models");
 if (!fs.existsSync(OPENVINO_MODELS)) {
   fs.mkdirSync(OPENVINO_MODELS, { recursive: true });
@@ -142,6 +172,23 @@ let llmProcSeq = 0;
 let llmReady = false;
 let llmError = null;
 let llmOperationQueue = Promise.resolve();
+let speechReady = false;
+let speechError = null;
+let speechOperationQueue = Promise.resolve();
+let speechSettings = {
+  model: null,
+  language: "auto",
+  threads: Math.max(1, Math.min(8, os.cpus().length || 4)),
+  backendBinary: "",
+  backendMode: "",
+};
+let speechTranscriptionState = {
+  active: false,
+  phase: "",
+  progress: 0,
+  model: "",
+  filename: "",
+};
 let llmSettings = {
   model: null,
   threads: Math.max(1, Math.min(16, os.cpus().length || 4)),
@@ -1396,6 +1443,21 @@ async function findAvailableLlmPort() {
   throw new Error(`No free LLM port found. Tried ${PREFERRED_LLM_PORT} and 28121-28160.`);
 }
 
+async function findAvailableSpeechPort() {
+  const preferred = await checkPort(PREFERRED_SPEECH_PORT);
+  if (preferred.available) return PREFERRED_SPEECH_PORT;
+
+  for (let port = 28161; port <= 28190; port += 1) {
+    const candidate = await checkPort(port);
+    if (candidate.available) {
+      console.log(`  [speech] Preferred port ${PREFERRED_SPEECH_PORT} is busy; using ${port} instead.`);
+      return port;
+    }
+  }
+
+  throw new Error(`No free speech port found. Tried ${PREFERRED_SPEECH_PORT} and 28161-28190.`);
+}
+
 function getLlmBackend() {
   return getLlmBackendCandidates()[0] || null;
 }
@@ -1535,6 +1597,283 @@ function getLlmModels() {
   } catch (_) {
     return [];
   }
+}
+
+function findExistingFile(candidates) {
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || "";
+}
+
+function getSpeechBackend() {
+  if (osPlatform === "win32") {
+    return {
+      cli: findExistingFile([SPEECH_BACKEND_PATHS.winCli, path.join(ROOT, "app", "speech-backend", "win", "main.exe")]),
+      server: findExistingFile([SPEECH_BACKEND_PATHS.winServer, path.join(ROOT, "app", "speech-backend", "win", "server.exe")]),
+      mode: "whisper.cpp CPU",
+    };
+  }
+  if (osPlatform === "darwin") {
+    return {
+      cli: findExistingFile([SPEECH_BACKEND_PATHS.macCli, path.join(ROOT, "app", "speech-backend", "mac", "main")]),
+      server: findExistingFile([SPEECH_BACKEND_PATHS.macServer, path.join(ROOT, "app", "speech-backend", "mac", "server")]),
+      mode: "whisper.cpp Metal/CPU",
+    };
+  }
+  return {
+    cli: findExistingFile([SPEECH_BACKEND_PATHS.linuxCli, path.join(ROOT, "app", "speech-backend", "linux", "main")]),
+    server: findExistingFile([SPEECH_BACKEND_PATHS.linuxServer, path.join(ROOT, "app", "speech-backend", "linux", "server")]),
+    mode: "whisper.cpp CPU",
+  };
+}
+
+function getSpeechModels() {
+  const catalog = SPEECH_MODEL_CATALOG.map((model) => {
+    const modelPath = path.join(SPEECH_MODELS, model.filename);
+    const installed = fs.existsSync(modelPath);
+    return {
+      ...model,
+      installed,
+      sizeBytes: installed ? getPathSize(modelPath) : 0,
+      localSize: installed ? formatBytes(getPathSize(modelPath)) : "",
+      url: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${model.filename}`,
+    };
+  });
+
+  const known = new Set(catalog.map((model) => model.filename.toLowerCase()));
+  let custom = [];
+  try {
+    custom = fs.readdirSync(SPEECH_MODELS)
+      .filter((filename) => filename.toLowerCase().endsWith(".bin") && !known.has(filename.toLowerCase()))
+      .map((filename) => {
+        const sizeBytes = getPathSize(path.join(SPEECH_MODELS, filename));
+        return {
+          id: filename,
+          name: filename,
+          filename,
+          size: formatBytes(sizeBytes),
+          localSize: formatBytes(sizeBytes),
+          sizeBytes,
+          language: "Custom",
+          installed: true,
+          recommended: false,
+          custom: true,
+        };
+      });
+  } catch (_) {}
+  return [...catalog, ...custom];
+}
+
+function resolveSpeechModel(value) {
+  const raw = String(value || "").trim();
+  const model = getSpeechModels().find((item) => item.id === raw || item.filename === raw) ||
+    getSpeechModels().find((item) => item.installed);
+  if (!model) throw new Error("Download or import a Whisper model first.");
+  const modelPath = path.join(SPEECH_MODELS, path.basename(model.filename));
+  if (!pathInside(modelPath, SPEECH_MODELS) || !fs.existsSync(modelPath)) {
+    throw new Error(`Speech model is not installed: ${model.filename}`);
+  }
+  return { ...model, path: modelPath };
+}
+
+function runExclusiveSpeechOperation(operation) {
+  const run = speechOperationQueue.catch(() => {}).then(operation);
+  speechOperationQueue = run.catch(() => {});
+  return run;
+}
+
+async function startSpeech(settings = {}) {
+  const backend = getSpeechBackend();
+  if (!backend.cli) {
+    throw new Error("whisper.cpp is not installed. Run the platform setup script to install the speech backend.");
+  }
+  const model = resolveSpeechModel(settings.model);
+  await killBackend();
+  await killOpenVinoWorker();
+  await killLlm();
+  PORT_SPEECH = await findAvailableSpeechPort();
+  speechError = null;
+  speechReady = true;
+  speechSettings = {
+    ...speechSettings,
+    model: model.filename,
+    language: settings.language || speechSettings.language || "auto",
+    threads: Math.max(1, Math.min(32, Number(settings.threads) || speechSettings.threads || 4)),
+    backendBinary: path.basename(backend.cli),
+    backendMode: backend.mode,
+  };
+}
+
+async function stopSpeech() {
+  speechReady = false;
+  speechError = null;
+  speechTranscriptionState = { active: false, phase: "", progress: 0, model: "", filename: "" };
+}
+
+function readBinaryBody(req, limitBytes = 250 * 1024 * 1024) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let bytes = 0;
+    req.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > limitBytes) {
+        reject(new Error(`Audio file is too large. Limit is ${Math.round(limitBytes / (1024 * 1024))} MB.`));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
+function isWaveBuffer(buffer) {
+  return buffer?.length > 44 &&
+    buffer.toString("ascii", 0, 4) === "RIFF" &&
+    buffer.toString("ascii", 8, 12) === "WAVE";
+}
+
+function saveTranscript(result) {
+  const createdAt = new Date().toISOString();
+  const stamp = createdAt.replace(/[:.]/g, "-");
+  const base = `transcript-${stamp}-${safeOutputName(result.sourceFilename || "audio")}`;
+  const textFilename = `${base}.txt`;
+  const jsonFilename = `${base}.json`;
+  fs.writeFileSync(path.join(TRANSCRIPTIONS, textFilename), result.text || "", "utf8");
+  const metadata = {
+    ...result,
+    createdAt,
+    textFile: textFilename,
+    metadata: jsonFilename,
+  };
+  fs.writeFileSync(path.join(TRANSCRIPTIONS, jsonFilename), JSON.stringify(metadata, null, 2), "utf8");
+  return metadata;
+}
+
+function listTranscriptions() {
+  try {
+    return fs.readdirSync(TRANSCRIPTIONS)
+      .filter((file) => file.toLowerCase().endsWith(".json"))
+      .map((file) => {
+        const filePath = path.join(TRANSCRIPTIONS, file);
+        try {
+          const metadata = JSON.parse(fs.readFileSync(filePath, "utf8"));
+          const stat = fs.statSync(filePath);
+          return {
+            ...metadata,
+            filename: file,
+            displayName: metadata.sourceFilename || metadata.textFile || file,
+            sizeBytes: stat.size,
+            size: formatBytes(stat.size),
+            modifiedAt: stat.mtime.toISOString(),
+            createdAt: metadata.createdAt || stat.mtime.toISOString(),
+            url: `/transcriptions/${encodeURIComponent(file)}`,
+            textUrl: metadata.textFile ? `/transcriptions/${encodeURIComponent(metadata.textFile)}` : "",
+          };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")));
+  } catch (_) {
+    return [];
+  }
+}
+
+function transcribeWavBuffer(buffer, options = {}) {
+  return new Promise((resolve, reject) => {
+    if (!isWaveBuffer(buffer)) {
+      reject(new Error("Speech transcription currently accepts WAV audio only."));
+      return;
+    }
+    const backend = getSpeechBackend();
+    if (!backend.cli) {
+      reject(new Error("whisper.cpp CLI backend is not installed."));
+      return;
+    }
+    const model = resolveSpeechModel(options.model || speechSettings.model);
+    const language = String(options.language || speechSettings.language || "auto");
+    const sourceFilename = safeOutputName(options.filename || "recording.wav") || "recording.wav";
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const tempBase = path.join(TRANSCRIPTIONS, `.speech-${stamp}-${sourceFilename.replace(/\.[^.]+$/, "")}`);
+    const wavPath = `${tempBase}.wav`;
+    const outBase = `${tempBase}-out`;
+    fs.writeFileSync(wavPath, buffer);
+
+    speechTranscriptionState = {
+      active: true,
+      phase: "Transcribing audio...",
+      progress: -1,
+      model: model.filename,
+      filename: sourceFilename,
+    };
+
+    const args = [
+      "-m", model.path,
+      "-f", wavPath,
+      "-otxt",
+      "-oj",
+      "-of", outBase,
+      "-t", String(Math.max(1, Math.min(32, Number(options.threads) || speechSettings.threads || 4))),
+    ];
+    if (language && language !== "auto") {
+      args.push("-l", language);
+    } else {
+      args.push("-l", "auto");
+    }
+
+    const startedAt = Date.now();
+    console.log("  [speech] Starting:", backend.cli, args.join(" "));
+    const proc = spawn(backend.cli, args, {
+      stdio: "pipe",
+      windowsHide: true,
+      env: {
+        ...process.env,
+        ...(osPlatform === "linux" ? { LD_LIBRARY_PATH: path.dirname(backend.cli) + (process.env.LD_LIBRARY_PATH ? `:${process.env.LD_LIBRARY_PATH}` : "") } : {}),
+        ...(osPlatform === "darwin" ? { DYLD_LIBRARY_PATH: path.dirname(backend.cli) + (process.env.DYLD_LIBRARY_PATH ? `:${process.env.DYLD_LIBRARY_PATH}` : "") } : {}),
+      },
+    });
+    let stdout = "";
+    let stderr = "";
+    proc.stdout.on("data", (data) => {
+      stdout += data.toString();
+      process.stdout.write("  [speech] " + data.toString());
+    });
+    proc.stderr.on("data", (data) => {
+      stderr += data.toString();
+      process.stderr.write("  [speech-err] " + data.toString());
+    });
+    proc.on("exit", (code) => {
+      try { fs.unlinkSync(wavPath); } catch (_) {}
+      speechTranscriptionState = { active: false, phase: code === 0 ? "Complete" : "Failed", progress: code === 0 ? 100 : 0, model: model.filename, filename: sourceFilename };
+      if (code !== 0) {
+        const message = (stderr || stdout || `whisper.cpp exited with code ${code}`).trim().slice(-1200);
+        speechError = message;
+        reject(new Error(message));
+        return;
+      }
+      const txtPath = `${outBase}.txt`;
+      const jsonPath = `${outBase}.json`;
+      const text = fs.existsSync(txtPath) ? fs.readFileSync(txtPath, "utf8").trim() : stdout.trim();
+      let raw = null;
+      try {
+        raw = fs.existsSync(jsonPath) ? JSON.parse(fs.readFileSync(jsonPath, "utf8")) : null;
+      } catch (_) {}
+      try { fs.unlinkSync(txtPath); } catch (_) {}
+      try { fs.unlinkSync(jsonPath); } catch (_) {}
+      const saved = saveTranscript({
+        text,
+        model: model.filename,
+        modelName: model.name,
+        language,
+        sourceFilename,
+        durationMs: Date.now() - startedAt,
+        raw,
+      });
+      speechError = null;
+      resolve(saved);
+    });
+  });
 }
 
 function pingLlmReady(expectedModel = "") {
@@ -3730,7 +4069,7 @@ function cancelModelDownload() {
       try { fs.unlinkSync(activeDownload.tempPath || activeDownload.destPath); } catch (_) {}
     }
   } else if (filename) {
-    const targetDir = downloadState.kind === "text" ? LLM_MODELS : MODELS;
+    const targetDir = downloadState.kind === "text" ? LLM_MODELS : downloadState.kind === "speech" ? SPEECH_MODELS : MODELS;
     try { fs.unlinkSync(`${path.join(targetDir, filename)}.part`); } catch (_) {}
   }
   activeDownload = null;
@@ -3754,7 +4093,7 @@ const MIME = {
   ".html": "text/html", ".js": "application/javascript",
   ".css":  "text/css",  ".png": "image/png",
   ".jpg":  "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml",
-  ".ico":  "image/x-icon", ".json": "application/json",
+  ".ico":  "image/x-icon", ".json": "application/json", ".wav": "audio/wav", ".txt": "text/plain",
   ".woff2":"font/woff2", ".woff": "font/woff", ".ttf": "font/ttf",
 };
 
@@ -4047,12 +4386,17 @@ function deleteGeneratedOutputs(outputs = []) {
   return deleted;
 }
 
-function streamModelUpload(req, filename, targetDir = MODELS, textOnly = false) {
+function streamModelUpload(req, filename, targetDir = MODELS, mode = "image") {
   return new Promise((resolve, reject) => {
     const safeFilename = path.basename(filename || "");
     const lowerName = safeFilename.toLowerCase();
-    if (!safeFilename || (textOnly ? !lowerName.endsWith(".gguf") : !isModelFile(lowerName))) {
-      reject(new Error(textOnly ? "Filename must end with .gguf" : "Filename must end with .gguf, .safetensors, or .ckpt"));
+    const valid = mode === "text"
+      ? lowerName.endsWith(".gguf")
+      : mode === "speech"
+        ? lowerName.endsWith(".bin")
+        : isModelFile(lowerName);
+    if (!safeFilename || !valid) {
+      reject(new Error(mode === "text" ? "Filename must end with .gguf" : mode === "speech" ? "Filename must end with .bin" : "Filename must end with .gguf, .safetensors, or .ckpt"));
       return;
     }
 
@@ -4090,9 +4434,9 @@ function streamModelUpload(req, filename, targetDir = MODELS, textOnly = false) 
         finished = true;
         fs.renameSync(tempPath, destPath);
         console.log(`  [api] Imported model file: ${safeFilename}`);
-        if (textOnly) {
+        if (mode === "text" || mode === "speech") {
           const stats = fs.statSync(destPath);
-          resolve({ filename: safeFilename, name: safeFilename, sizeBytes: stats.size, size: formatBytes(stats.size), format: "GGUF" });
+          resolve({ filename: safeFilename, name: safeFilename, sizeBytes: stats.size, size: formatBytes(stats.size), format: mode === "speech" ? "Whisper GGML" : "GGUF" });
         } else {
           resolve(getModelInfo(safeFilename));
         }
@@ -4138,6 +4482,13 @@ const server = http.createServer(async (req, res) => {
         error: llmError,
         settings: llmSettings,
         port: PORT_LLM,
+      },
+      speech: {
+        ready: speechReady,
+        error: speechError,
+        settings: speechSettings,
+        backend: getSpeechBackend(),
+        transcription: speechTranscriptionState,
       },
       hardware: getHardwareSpecs(),
       telemetry: getTelemetry(),
@@ -4276,6 +4627,109 @@ const server = http.createServer(async (req, res) => {
     } catch (err) {
       return json(res, 500, { ok: false, error: err.message || String(err) });
     }
+  }
+
+  if (req.url === "/api/speech/status" && req.method === "GET") {
+    const backend = getSpeechBackend();
+    return json(res, 200, {
+      ok: true,
+      ready: speechReady,
+      running: speechReady,
+      port: PORT_SPEECH,
+      preferredPort: PREFERRED_SPEECH_PORT,
+      backendInstalled: Boolean(backend.cli),
+      backendPath: backend.cli || "",
+      serverPath: backend.server || "",
+      backendMode: backend.mode,
+      error: speechError,
+      settings: speechSettings,
+      transcription: speechTranscriptionState,
+    });
+  }
+
+  if (req.url === "/api/speech/models" && req.method === "GET") {
+    return json(res, 200, { ok: true, models: getSpeechModels() });
+  }
+
+  if (req.url === "/api/speech/start" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      await runExclusiveSpeechOperation(() => startSpeech(body));
+      return json(res, 200, { ok: true, ready: speechReady, settings: speechSettings, port: PORT_SPEECH });
+    } catch (err) {
+      speechError = err.message || String(err);
+      return json(res, 500, { ok: false, error: speechError });
+    }
+  }
+
+  if (req.url === "/api/speech/stop" && req.method === "POST") {
+    await runExclusiveSpeechOperation(() => stopSpeech());
+    return json(res, 200, { ok: true });
+  }
+
+  if (req.url.startsWith("/api/speech/transcribe") && req.method === "POST") {
+    const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+    try {
+      const audio = await readBinaryBody(req);
+      const result = await runExclusiveSpeechOperation(() => transcribeWavBuffer(audio, {
+        model: parsed.searchParams.get("model") || speechSettings.model,
+        language: parsed.searchParams.get("language") || "auto",
+        filename: parsed.searchParams.get("filename") || req.headers["x-filename"] || "recording.wav",
+        threads: parsed.searchParams.get("threads") || speechSettings.threads,
+      }));
+      return json(res, 200, { ok: true, transcription: result });
+    } catch (err) {
+      speechError = err.message || String(err);
+      return json(res, err.message?.includes("too large") ? 413 : 500, { ok: false, error: speechError });
+    }
+  }
+
+  if (req.url === "/api/speech/download-model" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    if (downloadState.active) return json(res, 409, { ok: false, error: "Another model download is already active." });
+    const modelId = String(body.modelId || body.model_id || body.model || "");
+    const catalogModel = SPEECH_MODEL_CATALOG.find((model) => model.id === modelId || model.filename === modelId);
+    const url = body.url ? String(body.url) : (catalogModel ? `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/${catalogModel.filename}` : "");
+    const filename = path.basename(String(body.filename || catalogModel?.filename || ""));
+    if (!url || !filename || !filename.toLowerCase().endsWith(".bin")) {
+      return json(res, 400, { ok: false, error: "A speech model .bin URL or catalog model id is required." });
+    }
+    startModelDownload(url, filename, SPEECH_MODELS, "speech");
+    return json(res, 200, { ok: true, message: "Speech model download started", filename });
+  }
+
+  if (req.url.startsWith("/api/speech/import-model") && req.method === "POST") {
+    try {
+      const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+      const result = await streamModelUpload(req, parsed.searchParams.get("filename"), SPEECH_MODELS, "speech");
+      return json(res, 200, { ok: true, message: `Imported ${result.filename}`, model: result });
+    } catch (err) {
+      console.error("  [api] Failed to import speech model:", err);
+      return json(res, 500, { ok: false, error: err.message });
+    }
+  }
+
+  if (req.url === "/api/speech/delete-model" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    const filename = path.basename(String(body.filename || ""));
+    const modelPath = path.join(SPEECH_MODELS, filename);
+    if (!filename || !pathInside(modelPath, SPEECH_MODELS)) {
+      return json(res, 400, { ok: false, error: "Invalid filename" });
+    }
+    if (speechSettings.model === filename) await stopSpeech();
+    try {
+      fs.unlinkSync(modelPath);
+      return json(res, 200, { ok: true });
+    } catch (err) {
+      return json(res, err.code === "ENOENT" ? 404 : 500, { ok: false, error: err.code === "ENOENT" ? "Speech model not found" : err.message });
+    }
+  }
+
+  if (req.url === "/api/speech/transcriptions" && req.method === "GET") {
+    return json(res, 200, { ok: true, transcriptions: listTranscriptions() });
   }
 
 function isOomError(msg) {
@@ -4855,7 +5309,7 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
   if (req.url.startsWith("/api/llm/import-model") && req.method === "POST") {
     try {
       const parsed = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-      const result = await streamModelUpload(req, parsed.searchParams.get("filename"), LLM_MODELS, true);
+      const result = await streamModelUpload(req, parsed.searchParams.get("filename"), LLM_MODELS, "text");
       return json(res, 200, { ok: true, message: `Imported ${result.filename}`, model: result });
     } catch (err) {
       console.error("  [api] Failed to import text model:", err);
@@ -4942,6 +5396,7 @@ server.listen(PORT_FRONTEND, "0.0.0.0", () => {
   console.log("   Frontend : http://localhost:" + PORT_FRONTEND);
   console.log("   Image API: http://127.0.0.1:" + PORT_BACKEND);
   console.log("   Text API : starts on http://127.0.0.1:" + PREFERRED_LLM_PORT);
+  console.log("   Speech   : managed locally, API on frontend port");
   console.log("  ============================================================");
   console.log("");
 
@@ -4950,5 +5405,5 @@ server.listen(PORT_FRONTEND, "0.0.0.0", () => {
 });
 
 // Graceful shutdown
-process.on("SIGINT",  async () => { await killBackend(); await killOpenVinoWorker(); await killLlm(); process.exit(0); });
-process.on("SIGTERM", async () => { await killBackend(); await killOpenVinoWorker(); await killLlm(); process.exit(0); });
+process.on("SIGINT",  async () => { await killBackend(); await killOpenVinoWorker(); await killLlm(); await stopSpeech(); process.exit(0); });
+process.on("SIGTERM", async () => { await killBackend(); await killOpenVinoWorker(); await killLlm(); await stopSpeech(); process.exit(0); });

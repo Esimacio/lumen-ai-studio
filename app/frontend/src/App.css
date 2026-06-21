@@ -1303,6 +1303,136 @@ body {
   opacity: 0.8;
 }
 
+.speech-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.speech-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 0.9fr) minmax(320px, 1.1fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.speech-panel,
+.speech-result-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+
+.speech-panel-header,
+.speech-button-row,
+.speech-controls-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.speech-panel-header {
+  justify-content: space-between;
+}
+
+.speech-panel-header h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.speech-button-row {
+  flex-wrap: wrap;
+}
+
+.speech-controls-row {
+  align-items: flex-end;
+}
+
+.speech-label {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.speech-starter-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+}
+
+.speech-capture-zone {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 120px;
+  border: 1px dashed var(--md-sys-color-outline-variant);
+  border-radius: var(--md-shape-corner-medium);
+  padding: 18px;
+  background: var(--md-sys-color-surface-container-low);
+}
+
+.speech-capture-zone p {
+  margin: 4px 0 0 0;
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.m3-textarea.speech-result-textarea {
+  min-height: 420px;
+  height: clamp(420px, 46vh, 720px);
+  resize: vertical;
+  line-height: 1.55;
+  font-size: 0.98rem;
+}
+
+.speech-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.speech-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-shape-corner-small);
+}
+
+.speech-history-item div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.speech-history-item strong,
+.speech-history-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speech-history-item span {
+  color: var(--md-sys-color-on-surface-variant);
+  font-size: 0.78rem;
+}
+
+@media (max-width: 980px) {
+  .speech-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Glassmorphic UI Cards */
 .m3-card {
   background-color: var(--md-sys-color-surface);

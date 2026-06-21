@@ -158,7 +158,7 @@ function Expand-WithProgress {
 # ══════════════════════════════════════════════════════════════════════════════
 Print-Header
 
-$steps = 5
+$steps = 6
 
 # ── Step 1: Portable Node.js ──────────────────────────────────────────────────
 Print-Step 1 $steps "Setting up portable Node.js (app/tools/node-win/)"
@@ -427,7 +427,14 @@ if (-not $?) {
     Read-Host; exit 1
 }
 
-Print-Step 4 $steps "Installing frontend dependencies (app/frontend/)"
+Print-Step 4 $steps "Setting up whisper.cpp speech backend"
+& (Join-Path $scriptDir "setup-whisper.ps1")
+if (-not $?) {
+    Print-Fail "whisper.cpp setup failed."
+    Read-Host; exit 1
+}
+
+Print-Step 5 $steps "Installing frontend dependencies (app/frontend/)"
 Write-Host ""
 
 if (-not (Test-Path $npmCmd)) {
@@ -481,7 +488,7 @@ try {
     Print-OK "Dependencies installed!"
 
     # ── Step 4: Build frontend ────────────────────────────────────────────────
-    Print-Step 5 $steps "Building frontend -> app/dist/"
+    Print-Step 6 $steps "Building frontend -> app/dist/"
     Write-Host ""
 
     & $npmCmd run build 2>&1

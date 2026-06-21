@@ -34,6 +34,12 @@ if [[ -d "$APP_DIR/llm-backend" ]]; then
   rm -rf "$APP_DIR/llm-backend"
 fi
 
+# Delete whisper.cpp backend
+if [[ -d "$APP_DIR/speech-backend" ]]; then
+  echo "   >> Removing whisper.cpp speech backend binaries..."
+  rm -rf "$APP_DIR/speech-backend"
+fi
+
 # Delete dist
 if [[ -d "$APP_DIR/dist" ]]; then
   echo "   >> Removing dist/ build folder..."
@@ -48,6 +54,16 @@ fi
 # Preserve text models
 if [[ -d "$APP_DIR/llm-models" ]]; then
   echo "   >> Preserving text models in app/llm-models."
+fi
+
+# Preserve speech models
+if [[ -d "$APP_DIR/speech-models" ]]; then
+  echo "   >> Preserving speech models in app/speech-models."
+fi
+
+# Preserve transcriptions
+if [[ -d "$APP_DIR/transcriptions" ]]; then
+  echo "   >> Preserving speech transcripts in app/transcriptions."
 fi
 
 # Preserve OpenVINO models
@@ -76,7 +92,7 @@ fi
 
 echo ""
 echo "  ============================================================"
-echo "   Reset complete. Image models, text models, OpenVINO models, and generated outputs were preserved."
+echo "   Reset complete. Image models, text models, speech models, transcripts, OpenVINO models, and generated outputs were preserved."
 echo "  ============================================================"
 echo ""
 read -rp "  Press Enter to close..."

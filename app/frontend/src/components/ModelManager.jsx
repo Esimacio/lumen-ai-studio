@@ -21,7 +21,14 @@ import {
   deleteLlmModel,
   importLlmModel,
   getLlmStatus,
-  searchHuggingFaceModels
+  searchHuggingFaceModels,
+  listSpeechModels,
+  startSpeech,
+  stopSpeech,
+  downloadSpeechModel,
+  deleteSpeechModel,
+  importSpeechModel,
+  getSpeechStatus
 } from "../services/api";
 
 const MODEL_FILTERS = [
@@ -220,7 +227,7 @@ function ModelManager({
   specs,
   textSettings,
 }) {
-  const [activeModelType, setActiveModelType] = useState("image"); // "image" or "text"
+  const [activeModelType, setActiveModelType] = useState("image"); // "image", "text", or "speech"
   const [localModels, setLocalModels] = useState([]);
   const [isLoadingModels, setIsLoadingModels] = useState(true);
   const [downloadingModelId, setDownloadingModelId] = useState(null);
@@ -239,6 +246,8 @@ function ModelManager({
   const [backendInfo, setBackendInfo] = useState({ backendMode: "", backendBinary: "", backendDevice: "" });
   const [activeLlmModel, setActiveLlmModel] = useState(null);
   const [llmRunning, setLlmRunning] = useState(false);
+  const [activeSpeechModel, setActiveSpeechModel] = useState(null);
+  const [speechRunning, setSpeechRunning] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [huggingFaceModels, setHuggingFaceModels] = useState([]);
@@ -262,9 +271,15 @@ function ModelManager({
     }
   };
 
-  const normalizedLocalModels = localModels.map(normalizeModel).filter((model) => model.filename);
-  const displayedLocalModels = normalizedLocalModels.filter((model) => !model.isProjector);
-  const allModelNames = normalizedLocalModels.map((model) => model.filename);
+  const normalizedLocalModels = activeModelType === "speech"
+    ? localModels.filter((model) => model.filename)
+    : localModels.map(normalizeModel).filter((model) => model.filename);
+  const displayedLocalModels = activeModelType === "speech"
+    ? normalizedLocalModels.filter((model) => model.installed)
+    : normalizedLocalModels.filter((model) => !model.isProjector);
+  const allModelNames = activeModelType === "speech"
+    ? displayedLocalModels.map((model) => model.filename)
+    : normalizedLocalModels.map((model) => model.filename);
   const modelNames = displayedLocalModels.map((model) => model.filename);
   const isBusy = loadingModelId !== null || isUnloading;
   
@@ -286,10 +301,21 @@ function ModelManager({
     if (appleNpuSupported) {
       visibleModelLibrary = [...visibleModelLibrary, ...COREML_MODEL_LIBRARY];
     }
-  } else {
+  } else if (activeModelType === "text") {
     visibleModelLibrary = [{
       group: "Recommended Text Models from Hugging Face",
       items: hasHuggingFaceResults ? displayedHuggingFaceModels : TEXT_MODEL_LIBRARY[0].items,
+    }];
+  } else {
+    visibleModelLibrary = [{
+      group: "Whisper Speech Models",
+      items: normalizedLocalModels.filter((model) => model.url).map((model) => ({
+        ...model,
+        format: "Whisper.cpp",
+        approxSize: model.size,
+        notes: `${model.language || "Speech"} transcription model. Stored in app/speech-models/.`,
+        recommendedTiers: model.recommended ? ["Low", "Mid", "High"] : [],
+      })),
     }];
   }
 
@@ -364,9 +390,12 @@ function ModelManager({
       if (activeModelType === "image") {
         const list = await listLocalModels();
         setLocalModels(list.map(normalizeModel).filter((model) => model.filename));
-      } else {
+      } else if (activeModelType === "text") {
         const list = await listLlmModels();
         setLocalModels(list.map(normalizeModel).filter((model) => model.filename));
+      } else {
+        const list = await listSpeechModels();
+        setLocalModels(list.filter((model) => model.filename));
       }
     } catch (e) {
       console.error(e);
@@ -392,9 +421,10 @@ function ModelManager({
     let cancelled = false;
     const updateBackendInfo = async () => {
       try {
-        const [sdStatus, llmStatus] = await Promise.all([
+        const [sdStatus, llmStatus, speechStatus] = await Promise.all([
           getBackendStatus(),
-          getLlmStatus()
+          getLlmStatus(),
+          getSpeechStatus()
         ]);
         if (cancelled) return;
         
@@ -403,6 +433,7 @@ function ModelManager({
           backendBinary: sdStatus.settings?.backendBinary || sdStatus.loading?.backendBinary || "",
           backendDevice: sdStatus.settings?.backendDevice || sdStatus.loading?.device || "",
           llmBackendMode: llmStatus.settings?.backendMode || llmStatus.settings?.backendBinary || "",
+          speechBackendMode: speechStatus.settings?.backendMode || speechStatus.backendMode || "",
         });
         
         if (llmStatus.ready) {
@@ -411,6 +442,13 @@ function ModelManager({
         } else {
           setActiveLlmModel(null);
           setLlmRunning(false);
+        }
+        if (speechStatus.ready) {
+          setActiveSpeechModel(speechStatus.settings?.model || null);
+          setSpeechRunning(true);
+        } else {
+          setActiveSpeechModel(null);
+          setSpeechRunning(false);
         }
       } catch (_) {}
     };
@@ -460,8 +498,10 @@ function ModelManager({
       let res;
       if (activeModelType === "image") {
         res = await downloadModel(url);
-      } else {
+      } else if (activeModelType === "text") {
         res = await downloadLlmModel(url, expectedFilename, companion);
+      } else {
+        res = await downloadSpeechModel(url, expectedFilename);
       }
       if (res && res.ok) {
         if (!companion && res.projectorUrl && res.projectorFilename) {
@@ -523,7 +563,7 @@ function ModelManager({
     e.preventDefault();
     if (!downloadUrl.trim()) return;
 
-    let modelName = "model.safetensors";
+    let modelName = activeModelType === "image" ? "model.safetensors" : activeModelType === "text" ? "model.gguf" : "model.bin";
     try {
       const parsed = new URL(downloadUrl.trim());
       modelName = parsed.pathname.split("/").pop() || modelName;
@@ -538,6 +578,18 @@ function ModelManager({
 
   const handleLibraryDownload = async (model) => {
     if (downloadingModelId) return;
+
+    if (activeModelType === "speech") {
+      const confirmed = await showConfirm({
+        title: "Download Speech Model?",
+        message: `Download "${model.name}" (${model.size || model.approxSize})?`,
+        confirmLabel: "Download",
+      });
+      if (confirmed) {
+        await downloadByUrl(model.url, model.filename);
+      }
+      return;
+    }
 
     if (model.backendType === "openvino-npu") {
       const confirmed = await showConfirm({
@@ -639,7 +691,7 @@ function ModelManager({
         return;
       }
       await checkVramAndLoad(modelId);
-    } else {
+    } else if (activeModelType === "text") {
       setLoadingModelId(modelId);
       setModelLoadProgress({
         progress: 10,
@@ -678,6 +730,35 @@ function ModelManager({
         setServerRunning(false);
       } catch (err) {
         showAlert({ title: "Model Load Failed", message: err.message || String(err), danger: true });
+      } finally {
+        setModelLoadProgress(null);
+        setLoadingModelId(null);
+      }
+    } else {
+      setLoadingModelId(modelId);
+      setModelLoadProgress({
+        progress: 30,
+        phase: "Starting whisper.cpp speech runtime...",
+        speed: "",
+        current: 0,
+        total: 0,
+        model: modelId,
+        backendMode: "",
+        backendBinary: "",
+        device: "",
+      });
+      try {
+        await stopServer();
+        await stopLlm();
+        await startSpeech(modelId, { threads: textSettings?.threads || specs?.cpu_cores_physical || 4 });
+        setActiveSpeechModel(modelId);
+        setSpeechRunning(true);
+        setActiveLlmModel(null);
+        setLlmRunning(false);
+        setActiveModel(null);
+        setServerRunning(false);
+      } catch (err) {
+        showAlert({ title: "Speech Model Load Failed", message: err.message || String(err), danger: true });
       } finally {
         setModelLoadProgress(null);
         setLoadingModelId(null);
@@ -872,13 +953,26 @@ function ModelManager({
           setUnloadProgress({ progress: 0, phase: "" });
         }, 500);
       }
-    } else {
+    } else if (activeModelType === "text") {
       setIsUnloading(true);
       setUnloadProgress({ progress: 50, phase: "Stopping llama.cpp backend process..." });
       try {
         await stopLlm();
         setActiveLlmModel(null);
         setLlmRunning(false);
+      } catch (e) {
+        showAlert({ title: "Unload Failed", message: e.message || String(e), danger: true });
+      } finally {
+        setIsUnloading(false);
+        setUnloadProgress({ progress: 0, phase: "" });
+      }
+    } else {
+      setIsUnloading(true);
+      setUnloadProgress({ progress: 50, phase: "Stopping whisper.cpp speech runtime..." });
+      try {
+        await stopSpeech();
+        setActiveSpeechModel(null);
+        setSpeechRunning(false);
       } catch (e) {
         showAlert({ title: "Unload Failed", message: e.message || String(e), danger: true });
       } finally {
@@ -901,9 +995,14 @@ function ModelManager({
           if (activeModel === filename) {
             await handleUnloadModel();
           }
-        } else {
+        } else if (activeModelType === "text") {
           await deleteLlmModel(filename);
           if (activeLlmModel === filename) {
+            await handleUnloadModel();
+          }
+        } else {
+          await deleteSpeechModel(filename);
+          if (activeSpeechModel === filename) {
             await handleUnloadModel();
           }
         }
@@ -937,8 +1036,18 @@ function ModelManager({
             status: progressData.status
           });
         }, controller.signal);
-      } else {
+      } else if (activeModelType === "text") {
         await importLlmModel(sourcePath, (progressData) => {
+          setImportProgress(Math.round(progressData.progress));
+          setImportInfo({
+            filename: progressData.filename,
+            speed: progressData.speed_mb_s.toFixed(1),
+            eta: Math.round(progressData.eta_secs),
+            status: progressData.status
+          });
+        }, controller.signal);
+      } else {
+        await importSpeechModel(sourcePath, (progressData) => {
           setImportProgress(Math.round(progressData.progress));
           setImportInfo({
             filename: progressData.filename,
@@ -995,6 +1104,13 @@ function ModelManager({
           style={{ height: "40px", padding: "0 20px" }}
         >
           Text Models (GGUF)
+        </button>
+        <button
+          className={`m3-btn ${activeModelType === "speech" ? "m3-btn-filled" : "m3-btn-outlined"}`}
+          onClick={() => setActiveModelType("speech")}
+          style={{ height: "40px", padding: "0 20px" }}
+        >
+          Speech Models (Whisper)
         </button>
       </div>
 
@@ -1054,6 +1170,26 @@ function ModelManager({
         </div>
       )}
 
+      {activeModelType === "speech" && activeSpeechModel && (
+        <div className="m3-card" style={{ borderLeft: "4px solid var(--md-sys-color-primary)", background: "var(--md-sys-color-primary-container)", color: "var(--md-sys-color-on-primary-container)" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div>
+              <h4 style={{ fontWeight: 700 }}>Active Speech Model: {activeSpeechModel}</h4>
+              <p style={{ fontSize: "0.85rem", marginTop: "2px", opacity: 0.9 }}>
+                The local whisper.cpp runtime is ready. Speech Transcriber can process WAV recordings and uploads.
+              </p>
+              {backendInfo.speechBackendMode && (
+                <div style={{ display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" }}>
+                  <span className="status-chip" style={{ cursor: "default", background: "rgba(255,255,255,0.15)", color: "inherit", border: "1px solid rgba(255,255,255,0.2)" }}>
+                    <span>{backendInfo.speechBackendMode}</span>
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Loading Progress Bar */}
       {modelLoadProgress && (
         <div className="m3-card" style={{ borderLeft: "4px solid var(--md-sys-color-primary)", marginTop: "24px" }}>
@@ -1105,7 +1241,7 @@ function ModelManager({
       <div className="m3-card" style={{ marginTop: "24px" }}>
         <h3 className="m3-card-title">
           <Database size={18} style={{ color: "var(--md-sys-color-primary)" }} />
-          Local {activeModelType === "image" ? "Image" : "Text"} Models ({displayedLocalModels.length})
+          Local {activeModelType === "image" ? "Image" : activeModelType === "text" ? "Text" : "Speech"} Models ({displayedLocalModels.length})
         </h3>
         
         {isLoadingModels ? (
@@ -1115,15 +1251,17 @@ function ModelManager({
           </div>
         ) : displayedLocalModels.length === 0 ? (
           <p style={{ fontSize: "0.9rem", color: "var(--md-sys-color-outline)", textAlign: "center", padding: "16px 0" }}>
-            {activeModelType === "image" 
+            {activeModelType === "image"
               ? "No image models detected in app/models/. Download from the library below or import a file."
-              : "No text models detected in app/llm-models/. Download from the library below or import a file."}
+              : activeModelType === "text"
+              ? "No text models detected in app/llm-models/. Download from the library below or import a file."
+              : "No speech models detected in app/speech-models/. Download from the library below or import a .bin file."}
           </p>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
             {displayedLocalModels.map((model) => {
               const filename = model.filename;
-              const isActive = activeModelType === "image" ? activeModel === filename : activeLlmModel === filename;
+              const isActive = activeModelType === "image" ? activeModel === filename : activeModelType === "text" ? activeLlmModel === filename : activeSpeechModel === filename;
               
               return (
                 <div 
@@ -1144,7 +1282,9 @@ function ModelManager({
                     <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>
                       {activeModelType === "image"
                         ? (model.backendType === "openvino-npu" ? "OpenVINO NPU Model" : model.format || "Local Weights File")
-                        : "llama.cpp GGUF Model"
+                        : activeModelType === "text"
+                        ? "llama.cpp GGUF Model"
+                        : `${model.language || "Whisper"} Model`
                       } • {model.size || formatBytes(model.sizeBytes)}
                     </span>
                   </div>
@@ -1192,7 +1332,7 @@ function ModelManager({
       <div className="workspace-title-section" style={{ marginTop: "32px", marginBottom: "16px" }}>
         <h3 className="m3-card-title">
           <Library size={20} style={{ color: "var(--md-sys-color-primary)" }} />
-          {activeModelType === "text" ? "Hugging Face Model Library" : "Model Library"}
+          {activeModelType === "text" ? "Hugging Face Model Library" : activeModelType === "speech" ? "Speech Model Library" : "Model Library"}
         </h3>
       </div>
 
@@ -1401,14 +1541,14 @@ function ModelManager({
           <input
             type="file"
             style={{ display: "none" }}
-            accept={activeModelType === "image" ? ".safetensors,.ckpt" : ".gguf"}
+            accept={activeModelType === "image" ? ".safetensors,.ckpt" : activeModelType === "text" ? ".gguf" : ".bin"}
             onChange={handleImportFile}
             disabled={importProgress !== null}
           />
           <FolderOpen className="import-icon" />
           <span style={{ fontWeight: 600 }}>Choose weights file</span>
           <span style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", textAlign: "center" }}>
-            Select {activeModelType === "image" ? "`.safetensors` or `.ckpt` weights." : "`.gguf` weights."}
+            Select {activeModelType === "image" ? "`.safetensors` or `.ckpt` weights." : activeModelType === "text" ? "`.gguf` weights." : "`whisper.cpp .bin` weights."}
           </span>
         </label>
 
@@ -1418,7 +1558,7 @@ function ModelManager({
             Download Model from URL
           </h4>
           <p style={{ fontSize: "0.75rem", color: "var(--md-sys-color-outline)", marginBottom: "12px" }}>
-            Download any {activeModelType === "image" ? "Safetensors" : "GGUF"} model from Hugging Face directly to your models folder.
+            Download any {activeModelType === "image" ? "Safetensors" : activeModelType === "text" ? "GGUF" : "Whisper .bin"} model from Hugging Face directly to your models folder.
           </p>
           {isUrlDownloading ? (
             <div className="model-progress-section" style={{ marginTop: "0px" }}>
