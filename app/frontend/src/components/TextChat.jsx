@@ -169,6 +169,7 @@ function TextChat({
   const fileInputRef = useRef(null);
   const supportsVision = Boolean(status.ready && status.settings?.supportsVision);
   const supportsThinking = Boolean(status.ready && status.settings?.supportsThinking);
+  const visionStatus = status.settings?.visionStatus || "Image input requires a matching mmproj projector file.";
 
   const resizeComposerInput = useCallback(() => {
     const textarea = textareaRef.current;
@@ -1040,7 +1041,7 @@ function TextChat({
               className="chat-composer-attach-btn"
               onClick={() => fileInputRef.current?.click()}
               disabled={!supportsVision || isBusy}
-              title={supportsVision ? "Attach files or images" : "Image attachment requires a vision model or matching projector"}
+              title={supportsVision ? "Attach files or images" : visionStatus}
               style={{ marginBottom: "2px" }}
             >
               <Paperclip size={17} />

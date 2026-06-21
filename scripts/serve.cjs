@@ -140,6 +140,7 @@ let llmSettings = {
   backendBinary: "",
   supportsVision: false,
   visionMode: "none",
+  visionStatus: "Projector not loaded",
   flashAttn: true,
   cacheTypeK: "q8_0",
   cacheTypeV: "q8_0",
@@ -1385,6 +1386,7 @@ function killLlm() {
     llmReady = false;
     llmSettings.supportsVision = false;
     llmSettings.visionMode = "none";
+    llmSettings.visionStatus = "Projector not loaded";
     llmSettings.mmproj = null;
     if (!llmProc) {
       resolve();
@@ -2476,14 +2478,6 @@ function chooseAutoContext(modelFilename, isGpu) {
   return 2048;
 }
 
-function modelHasEmbeddedVisionSupport(filename) {
-  const lower = String(filename || "").toLowerCase();
-  return /gemma[-_]?4/.test(lower) ||
-         /gemma[-_]?3n/.test(lower) ||
-         /(?:^|[-_])e[24]b(?:[-_]|$)/.test(lower) ||
-         /paligemma/.test(lower);
-}
-
 async function startLlm(settings = {}) {
   const filename = path.basename(String(settings.model || ""));
   const modelPath = path.join(LLM_MODELS, filename);
@@ -2550,7 +2544,6 @@ async function startLlm(settings = {}) {
 
   let mmprojPath = null;
   const lowerFilename = filename.toLowerCase();
-  const hasEmbeddedVision = modelHasEmbeddedVisionSupport(filename);
   const isMultimodal = lowerFilename.includes("llava") ||
                        lowerFilename.includes("vision") ||
                        lowerFilename.includes("qwen2vl") ||
@@ -2666,9 +2659,12 @@ async function startLlm(settings = {}) {
   if (mmprojPath) {
     args.push("--mmproj", mmprojPath);
   }
-  llmSettings.supportsVision = Boolean(mmprojPath || hasEmbeddedVision);
+  llmSettings.supportsVision = Boolean(mmprojPath);
   llmSettings.mmproj = mmprojPath ? path.basename(mmprojPath) : null;
-  llmSettings.visionMode = mmprojPath ? "mmproj" : (hasEmbeddedVision ? "embedded" : "none");
+  llmSettings.visionMode = mmprojPath ? "mmproj" : "none";
+  llmSettings.visionStatus = mmprojPath
+    ? `Using projector ${path.basename(mmprojPath)}`
+    : (isMultimodal ? "Matching mmproj projector not found" : "Model is text-only");
   const spawnEnv = { ...process.env };
   const backendDir = path.dirname(backend.path);
   
