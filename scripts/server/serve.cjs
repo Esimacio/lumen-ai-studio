@@ -94,6 +94,10 @@ const LLM_MODELS = path.join(ROOT, "app", "llm-models");
 if (!fs.existsSync(LLM_MODELS)) {
   fs.mkdirSync(LLM_MODELS, { recursive: true });
 }
+const CHAT_HISTORY = path.join(ROOT, "app", "chat-history");
+if (!fs.existsSync(CHAT_HISTORY)) {
+  fs.mkdirSync(CHAT_HISTORY, { recursive: true });
+}
 const LLM_BACKEND_PATHS = {
   winCuda: path.join(ROOT, "app", "llm-backend", "win", "cuda", "llama-server.exe"),
   winVulkan: path.join(ROOT, "app", "llm-backend", "win", "vulkan", "llama-server.exe"),
@@ -585,6 +589,50 @@ function isVirtualOrSoftwareGpu(name) {
          lowercase.includes("software rasterizer") ||
          lowercase.includes("virtualbox") ||
          lowercase.includes("vmware");
+}
+
+let cachedPreferredVulkanBackend = null;
+let cachedPreferredVulkanBackendChecked = false;
+function getPreferredVulkanBackendName() {
+  const explicit = String(process.env.SD_VULKAN_DEVICE || process.env.UAIS_VULKAN_DEVICE || "").trim();
+  if (/^vulkan\d+$/i.test(explicit)) return explicit.toLowerCase();
+  if (/^\d+$/.test(explicit)) return `vulkan${explicit}`;
+
+  if (cachedPreferredVulkanBackendChecked) return cachedPreferredVulkanBackend || "vulkan0";
+  cachedPreferredVulkanBackendChecked = true;
+  cachedPreferredVulkanBackend = "vulkan0";
+
+  if (osPlatform !== "linux") return cachedPreferredVulkanBackend;
+  try {
+    const result = spawnSync("vulkaninfo", ["--summary"], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    const output = `${result.stdout || ""}\n${result.stderr || ""}`;
+    const devices = [];
+    let current = null;
+    for (const line of output.split(/\r?\n/)) {
+      const gpuMatch = line.match(/^\s*GPU(\d+)\s*:/i);
+      if (gpuMatch) {
+        current = { index: Number(gpuMatch[1]), name: "", type: "" };
+        devices.push(current);
+        continue;
+      }
+      if (!current) continue;
+      const nameMatch = line.match(/deviceName\s*=\s*(.+)$/i);
+      if (nameMatch) current.name = nameMatch[1].trim();
+      const typeMatch = line.match(/deviceType\s*=\s*(.+)$/i);
+      if (typeMatch) current.type = typeMatch[1].trim();
+    }
+    const usable = devices.filter((device) => Number.isInteger(device.index) && !isVirtualOrSoftwareGpu(device.name));
+    const discrete = usable.find((device) => /discrete/i.test(device.type));
+    const amd = usable.find((device) => /amd|radeon/i.test(device.name));
+    const selected = discrete || amd || usable[0];
+    if (selected) cachedPreferredVulkanBackend = `vulkan${selected.index}`;
+  } catch (_) {}
+
+  return cachedPreferredVulkanBackend;
 }
 
 let cachedLlamaCudaGpu = null;
@@ -2662,6 +2710,9 @@ function getSetupPaths() {
       cpuBackend: BACKEND_PATHS.cpu,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   } else if (osPlatform === "darwin") {
     return {
@@ -2671,6 +2722,9 @@ function getSetupPaths() {
       macBackend: BACKEND_PATHS.mac,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   } else {
     // Linux / WSL
@@ -2683,6 +2737,9 @@ function getSetupPaths() {
       linuxRocmBackend: BACKEND_PATHS.linuxRocm,
       models: MODELS,
       outputs: OUTPUTS,
+      chatHistory: CHAT_HISTORY,
+      transcriptions: TRANSCRIPTIONS,
+      ttsOutputs: TTS_OUTPUTS,
     };
   }
 }
@@ -2695,6 +2752,9 @@ async function getHealth() {
     getPathInfo("Frontend build", paths.distIndex),
     getDirInfo("Models folder", paths.models),
     getDirInfo("Outputs folder", paths.outputs),
+    getDirInfo("Chat history folder", paths.chatHistory),
+    getDirInfo("Transcriptions folder", paths.transcriptions),
+    getDirInfo("TTS outputs folder", paths.ttsOutputs),
   ];
 
   if (osPlatform === "win32") {
@@ -2767,6 +2827,16 @@ async function getHealth() {
       totalBytes: getPathSize(OUTPUTS),
       totalSize: formatBytes(getPathSize(OUTPUTS)),
     },
+    chat: {
+      count: fs.existsSync(CHAT_HISTORY) ? fs.readdirSync(CHAT_HISTORY).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
+      totalBytes: getPathSize(CHAT_HISTORY),
+      totalSize: formatBytes(getPathSize(CHAT_HISTORY)),
+    },
+    speech: {
+      transcriptions: fs.existsSync(TRANSCRIPTIONS) ? fs.readdirSync(TRANSCRIPTIONS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
+      totalBytes: getPathSize(TRANSCRIPTIONS),
+      totalSize: formatBytes(getPathSize(TRANSCRIPTIONS)),
+    },
     tts: {
       models: fs.existsSync(TTS_MODELS) ? fs.readdirSync(TTS_MODELS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
       outputs: fs.existsSync(TTS_OUTPUTS) ? fs.readdirSync(TTS_OUTPUTS).filter((file) => file.toLowerCase().endsWith(".json")).length : 0,
@@ -2783,6 +2853,8 @@ function addCleanupCandidate(candidates, id, targetPath, reason, options = {}) {
   if (!options.allowUserData && (
     pathInside(targetPath, MODELS) ||
     pathInside(targetPath, OUTPUTS) ||
+    pathInside(targetPath, CHAT_HISTORY) ||
+    pathInside(targetPath, TRANSCRIPTIONS) ||
     pathInside(targetPath, TTS_MODELS) ||
     pathInside(targetPath, TTS_OUTPUTS)
   )) return;
@@ -3283,6 +3355,36 @@ function requestJson(url, payload = null, timeoutMs = 120000) {
     if (data) req.write(data);
     req.end();
   });
+}
+
+function proxyImageBackendRequest(req, res) {
+  const headers = { ...req.headers };
+  delete headers.host;
+  headers.host = `127.0.0.1:${PORT_BACKEND}`;
+
+  const proxyReq = http.request({
+    hostname: "127.0.0.1",
+    port: PORT_BACKEND,
+    path: req.url,
+    method: req.method,
+    headers,
+    timeout: 300000,
+  }, (proxyRes) => {
+    res.writeHead(proxyRes.statusCode || 502, {
+      ...proxyRes.headers,
+      "Access-Control-Allow-Origin": "*",
+    });
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on("error", (err) => {
+    json(res, 502, { ok: false, error: `Image backend is not reachable: ${err.message}` });
+  });
+  proxyReq.on("timeout", () => {
+    proxyReq.destroy(new Error("Image backend request timed out"));
+  });
+
+  req.pipe(proxyReq);
 }
 
 function requestHttpsJson(url, timeoutMs = 30000) {
@@ -4303,6 +4405,7 @@ async function startBackend(settings = {}) {
 
   let args = [];
   const requestedBackend = resolveBackendType(currentSettings.useGpu, currentSettings.backendType, currentSettings.model);
+  const selectedVulkanBackend = requestedBackend === "vulkan" ? getPreferredVulkanBackendName() : "";
 
   const supportsFlags = backendSupportsFlags[backendPath] !== false;
 
@@ -4331,7 +4434,7 @@ async function startBackend(settings = {}) {
       args.push("--rng", "cpu", "--sampler-rng", "cpu");
   } else if (requestedBackend === "vulkan") {
     if (supportsFlags) {
-      args.push("--backend", "vulkan0", "--params-backend", "vulkan0");
+      args.push("--backend", selectedVulkanBackend, "--params-backend", selectedVulkanBackend);
     }
     args.push("--rng", "cpu", "--sampler-rng", "cpu");
   } else if (requestedBackend === "cuda") {
@@ -4348,6 +4451,11 @@ async function startBackend(settings = {}) {
     args.push("--rng", "cpu", "--sampler-rng", "cpu");
   }
 
+  }
+
+  if (requestedBackend === "vulkan" && selectedVulkanBackend) {
+    currentSettings.backendDevice = selectedVulkanBackend;
+    backendLoadState.device = selectedVulkanBackend;
   }
 
   if (requestedBackend !== "apple-npu") {
@@ -4485,6 +4593,11 @@ async function startBackend(settings = {}) {
     process.stderr.write("  [sd-err] " + output);
     updateCoreMLLoadProgress(output);
     const cleanOutput = stripAnsi(output);
+    const runtimeLinkerError = describeLinuxRuntimeLinkerError(cleanOutput);
+    if (runtimeLinkerError) {
+      backendError = runtimeLinkerError;
+      backendLoadState.phase = "Linux runtime is too old for this backend";
+    }
     const deviceMatch = cleanOutput.match(/Device\s+\d+:\s*([^,\r\n]+)/);
     if (deviceMatch) {
       backendLoadState.device = deviceMatch[1].trim();
@@ -4829,6 +4942,8 @@ let generationState = {
   steps: 0,
   speed: "",
   decoding: false,
+  backendMode: "",
+  backendDevice: "",
 };
 
 function resetGenerationState() {
@@ -4838,6 +4953,8 @@ function resetGenerationState() {
     steps: 0,
     speed: "",
     decoding: false,
+    backendMode: "",
+    backendDevice: "",
   };
 }
 
@@ -5217,6 +5334,22 @@ function describeBackendError(rawError, modelPath) {
   return `${raw}\n\nThe backend could not create the model context. Common causes are a corrupt/incomplete model file, unsupported checkpoint type, or not enough free RAM/VRAM. Delete and re-download the model, then try CPU or Vulkan mode at 512x512.`;
 }
 
+function describeLinuxRuntimeLinkerError(rawError) {
+  const raw = String(rawError || "").trim();
+  const lower = raw.toLowerCase();
+  if (osPlatform !== "linux") return null;
+  if (!lower.includes("glibc") && !lower.includes("libstdc++") && !lower.includes("libc.so.6")) return null;
+
+  const needsGlibc = raw.match(/GLIBC_([0-9.]+)/)?.[1];
+  const needsGlibcxx = raw.match(/GLIBCXX_([0-9.]+)/)?.[1];
+  const requirements = [];
+  if (needsGlibc) requirements.push(`glibc ${needsGlibc}+`);
+  if (needsGlibcxx) requirements.push(`GLIBCXX_${needsGlibcxx}+`);
+  const requirementText = requirements.length ? requirements.join(" and ") : "newer glibc/libstdc++ runtime libraries";
+
+  return `${raw}\n\nThe selected model is not the problem. The Linux backend binary cannot start because this OS is missing ${requirementText}. The bundled Linux backends are built for Ubuntu 24.04-era systems. Use Ubuntu 24.04+, Fedora 40+, another glibc 2.38+ distro, or build stable-diffusion.cpp from source on this machine.`;
+}
+
 function describeBackendExitCode(code, backendPath) {
   const numericCode = Number(code);
   if (osPlatform === "win32" && numericCode === 3221225781) {
@@ -5295,6 +5428,101 @@ function safeOutputName(value) {
     .replace(/[^a-z0-9._-]/gi, "_")
     .replace(/_+/g, "_")
     .slice(0, 120);
+}
+
+function sanitizeChatMessageForStorage(message) {
+  if (!message || typeof message !== "object") return null;
+  const role = String(message.role || "").trim();
+  if (!["system", "user", "assistant"].includes(role)) return null;
+  let content = message.content;
+  if (Array.isArray(content)) {
+    content = content.map((item) => {
+      if (!item || typeof item !== "object") return item;
+      if (item.type === "image_url") {
+        return { type: "text", text: "[Attached image omitted from saved chat history]" };
+      }
+      return item;
+    });
+  } else if (typeof content !== "string") {
+    content = content === undefined || content === null ? "" : String(content);
+  }
+  return {
+    ...message,
+    role,
+    content,
+  };
+}
+
+function sanitizeChatConversationForStorage(conversation = {}) {
+  const now = Date.now();
+  const id = safeOutputName(conversation.id || `chat_${now}`) || `chat_${now}`;
+  const messages = Array.isArray(conversation.messages)
+    ? conversation.messages.map(sanitizeChatMessageForStorage).filter(Boolean)
+    : [];
+  const timestamp = Number(conversation.timestamp) || now;
+  return {
+    id,
+    title: String(conversation.title || "Chat Session").slice(0, 160),
+    model: String(conversation.model || ""),
+    messages,
+    timestamp,
+    createdAt: conversation.createdAt || new Date(timestamp).toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function getChatConversationPath(id) {
+  const safeId = safeOutputName(id);
+  if (!safeId) throw new Error("A chat id is required.");
+  const filePath = path.join(CHAT_HISTORY, `${safeId}.json`);
+  if (!pathInside(filePath, CHAT_HISTORY)) {
+    throw new Error("Invalid chat id.");
+  }
+  return filePath;
+}
+
+function saveChatConversation(conversation = {}) {
+  const saved = sanitizeChatConversationForStorage(conversation);
+  const filePath = getChatConversationPath(saved.id);
+  fs.writeFileSync(filePath, JSON.stringify(saved, null, 2), "utf8");
+  return saved;
+}
+
+function listChatConversations() {
+  try {
+    return fs.readdirSync(CHAT_HISTORY)
+      .filter((file) => file.toLowerCase().endsWith(".json"))
+      .map((file) => {
+        try {
+          const filePath = path.join(CHAT_HISTORY, file);
+          if (!pathInside(filePath, CHAT_HISTORY)) return null;
+          const conversation = JSON.parse(fs.readFileSync(filePath, "utf8"));
+          const stat = fs.statSync(filePath);
+          return {
+            ...conversation,
+            filename: file,
+            modifiedAt: stat.mtime.toISOString(),
+            sizeBytes: stat.size,
+            size: formatBytes(stat.size),
+          };
+        } catch (_) {
+          return null;
+        }
+      })
+      .filter(Boolean)
+      .sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+  } catch (_) {
+    return [];
+  }
+}
+
+function deleteChatConversation(id) {
+  const filePath = getChatConversationPath(id);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    return true;
+  }
+  return false;
 }
 
 function saveGeneratedOutput(imageDataUrl, metadata = {}) {
@@ -5483,6 +5711,9 @@ const server = http.createServer(async (req, res) => {
     res.end(); return;
   }
 
+  if ((req.url.startsWith("/v1/") || req.url.startsWith("/sdapi/")) && ["GET", "POST"].includes(req.method)) {
+    return proxyImageBackendRequest(req, res);
+  }
   // ── Management API ────────────────────────────────────────────────────────
   // GET /api/health
   if (req.url === "/api/health" && req.method === "GET") {
@@ -5589,6 +5820,34 @@ const server = http.createServer(async (req, res) => {
       preferredBackend: body.preferredBackend ? String(body.preferredBackend).toLowerCase() : undefined,
     });
     return json(res, 200, { ok: true, model: filename, settings: updated });
+  }
+
+  if (req.url === "/api/llm/conversations" && req.method === "GET") {
+    return json(res, 200, { ok: true, conversations: listChatConversations() });
+  }
+
+  if (req.url === "/api/llm/save-conversation" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      const conversation = saveChatConversation(body.conversation || body);
+      return json(res, 200, { ok: true, conversation });
+    } catch (err) {
+      console.error("  [api] Failed to save chat conversation:", err);
+      return json(res, 500, { ok: false, error: err.message || String(err) });
+    }
+  }
+
+  if (req.url === "/api/llm/delete-conversation" && req.method === "POST") {
+    const body = await readJsonBody(req, res);
+    if (!body) return;
+    try {
+      const deleted = deleteChatConversation(body.id);
+      return json(res, 200, { ok: true, deleted });
+    } catch (err) {
+      console.error("  [api] Failed to delete chat conversation:", err);
+      return json(res, 500, { ok: false, error: err.message || String(err) });
+    }
   }
 
   if (req.url === "/api/llm/models" && req.method === "GET") {
@@ -6589,7 +6848,11 @@ async function getLlmfitRecommendations(useCase = "chat", limit = 10) {
 
   // GET /api/generation-progress
   if (req.url === "/api/generation-progress" && req.method === "GET") {
-    return json(res, 200, generationState);
+    return json(res, 200, {
+      ...generationState,
+      backendMode: generationState.backendMode || currentSettings.backendMode || "",
+      backendDevice: generationState.backendDevice || currentSettings.backendDevice || "",
+    });
   }
 
   if (req.url === "/api/openvino-generate" && req.method === "POST") {
