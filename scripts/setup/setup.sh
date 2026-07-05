@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Uncensored AI Studio - Linux/macOS Setup Script
+# Lumen AI Studio - Linux/macOS Setup Script
 # Self-contained: no apt/yum/pacman, no global Node.js install.
 #
 
@@ -67,7 +67,7 @@ fi
 print_header() {
   echo ""
   echo "  ============================================================"
-  echo "   UNCENSORED AI STUDIO      -  $PLATFORM_LABEL First-Time Setup"
+  echo "   LUMEN AI STUDIO      -  $PLATFORM_LABEL First-Time Setup"
   echo "   100% Self-Contained  |  No System Install Required"
   echo "  ============================================================"
   echo ""
