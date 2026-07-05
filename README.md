@@ -99,7 +99,7 @@ Known-good image models available from the Model Manager:
 ## <a id="folder-architecture"></a>📁 Folder Architecture
 
 ```
-Uncensored-AI-Studio/
+lumen-studio-ai/
 ├── windows.bat                # Windows Launcher (Double-click entrypoint)
 ├── linux.sh                   # Linux Launcher (Terminal entrypoint)
 ├── mac.sh                     # macOS Launcher (Terminal entrypoint)
