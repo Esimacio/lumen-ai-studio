@@ -1,3 +1,8 @@
+
+<p align="center">
+  <img src="assets/lumen-banner.png" alt="Lumen AI Studio banner" width="100%">
+</p>
+
 # Lumen AI Studio
 
 **Light up your local tools.**
