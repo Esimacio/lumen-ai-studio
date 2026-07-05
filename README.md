@@ -20,7 +20,7 @@ I am not the original developer, and I cannot guarantee fixes for device-specifi
 
 Bug reports and contributions are welcome, but support is best-effort only.
 
-## What Lumen Studio AI does
+## What Lumen AI Studio does
 
 Lumen AI Studio brings several local AI capabilities into one desktop workspace:
 
