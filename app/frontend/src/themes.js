@@ -1,10 +1,9 @@
 export const THEMES = [
+ 
+  { id: "warm-olive", name: "Warm Olive", type: "light", primary: "#7B853A", secondary: "#C39A28", bg: "#F7F1E3" },
+  { id: "soft-lavender", name: "Soft Lavender", type: "light", primary: "#8F73B8", secondary: "#C7A7D8", bg: "#F7F3FA" },
+  { id: "golden-sand", name: "Golden Sand", type: "light", primary: "#B9852B", secondary: "#E0B45C", bg: "#FAF0D8" },
+  { id: "slate-night", name: "Slate Night", type: "dark", primary: "#8FA3C8", secondary: "#CBD5E1", bg: "#111827" },
+
   { id: "light", name: "Light Default", type: "light", primary: "#4f46e5", secondary: "#0ea5e9", bg: "#f8fafc" },
-  { id: "light-nord", name: "Nord Light", type: "light", primary: "#5e81ac", secondary: "#88c0d0", bg: "#eceff4" },
-  { id: "light-sakura", name: "Sakura Blossom", type: "light", primary: "#d05a74", secondary: "#e597a7", bg: "#fdf6f6" },
-  { id: "dark", name: "Dark Default", type: "dark", primary: "#6366f1", secondary: "#38bdf8", bg: "#090a0f" },
-  { id: "dark-dracula", name: "Dracula Classic", type: "dark", primary: "#bd93f9", secondary: "#ff79c6", bg: "#282a36" },
-  { id: "dark-cyberpunk", name: "Cyberpunk Neon", type: "dark", primary: "#ff007f", secondary: "#00f0ff", bg: "#0d0714" },
-  { id: "dark-forest", name: "Emerald Forest", type: "dark", primary: "#10b981", secondary: "#34d399", bg: "#060f0e" },
-  { id: "dark-oled", name: "OLED Pitch Black", type: "dark", primary: "#3b82f6", secondary: "#60a5fa", bg: "#000000" }
 ];
