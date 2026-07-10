@@ -91,6 +91,158 @@ html[data-theme="dark"] {
   --glass-blur: blur(16px);
 }
 
+/* Lumen Warm Olive Theme */
+html[data-theme="warm-olive"] {
+  --md-sys-color-primary: #7b853a;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: rgba(123, 133, 58, 0.14);
+  --md-sys-color-on-primary-container: #3f461b;
+
+  --md-sys-color-secondary: #c39a28;
+  --md-sys-color-on-secondary: #252313;
+  --md-sys-color-secondary-container: rgba(195, 154, 40, 0.16);
+  --md-sys-color-on-secondary-container: #55410b;
+
+  --md-sys-color-tertiary: #9aa56a;
+  --md-sys-color-on-tertiary: #202216;
+
+  --md-sys-color-background: #f7f1e3;
+  --md-sys-color-on-background: #24261a;
+  --md-sys-color-surface: #fbf7ec;
+  --md-sys-color-on-surface: #24261a;
+  --md-sys-color-surface-variant: #eee8d8;
+  --md-sys-color-on-surface-variant: #656752;
+
+  --md-sys-color-outline: #b9b397;
+  --md-sys-color-outline-variant: #d8d1ba;
+
+  --border-color: rgba(89, 92, 58, 0.18);
+  --border-color-muted: rgba(89, 92, 58, 0.1);
+
+  --md-sys-color-error: #b45339;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-success: #7b853a;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-card-border: rgba(89, 92, 58, 0.12);
+
+  --glass-shadow: 0 8px 32px 0 rgba(78, 76, 48, 0.08);
+  --glass-blur: blur(16px);
+}
+
+/* Lumen Soft Lavender Theme */
+html[data-theme="soft-lavender"] {
+  --md-sys-color-primary: #8f73b8;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: rgba(143, 115, 184, 0.14);
+  --md-sys-color-on-primary-container: #4c376c;
+
+  --md-sys-color-secondary: #c7a7d8;
+  --md-sys-color-on-secondary: #2b2034;
+  --md-sys-color-secondary-container: rgba(199, 167, 216, 0.18);
+  --md-sys-color-on-secondary-container: #5a4068;
+
+  --md-sys-color-tertiary: #b49ac9;
+  --md-sys-color-on-tertiary: #2b2034;
+
+  --md-sys-color-background: #f7f3fa;
+  --md-sys-color-on-background: #25212b;
+  --md-sys-color-surface: #fffbff;
+  --md-sys-color-on-surface: #25212b;
+  --md-sys-color-surface-variant: #eee7f4;
+  --md-sys-color-on-surface-variant: #675b72;
+
+  --md-sys-color-outline: #bfb3c9;
+  --md-sys-color-outline-variant: #ded4e7;
+
+  --border-color: rgba(103, 91, 114, 0.18);
+  --border-color-muted: rgba(103, 91, 114, 0.1);
+
+  --md-sys-color-error: #b45353;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-success: #7b9b6f;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-card-border: rgba(103, 91, 114, 0.12);
+
+  --glass-shadow: 0 8px 32px 0 rgba(86, 68, 112, 0.08);
+  --glass-blur: blur(16px);
+}
+
+/* Lumen Golden Sand Theme */
+html[data-theme="golden-sand"] {
+  --md-sys-color-primary: #b9852b;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: rgba(185, 133, 43, 0.16);
+  --md-sys-color-on-primary-container: #5a3b06;
+
+  --md-sys-color-secondary: #e0b45c;
+  --md-sys-color-on-secondary: #2f250f;
+  --md-sys-color-secondary-container: rgba(224, 180, 92, 0.2);
+  --md-sys-color-on-secondary-container: #604717;
+
+  --md-sys-color-tertiary: #d2a44d;
+  --md-sys-color-on-tertiary: #2f250f;
+
+  --md-sys-color-background: #faf0d8;
+  --md-sys-color-on-background: #2c2618;
+  --md-sys-color-surface: #fff9ec;
+  --md-sys-color-on-surface: #2c2618;
+  --md-sys-color-surface-variant: #f1e2bf;
+  --md-sys-color-on-surface-variant: #6f6043;
+
+  --md-sys-color-outline: #c8b58c;
+  --md-sys-color-outline-variant: #e3d2aa;
+
+  --border-color: rgba(111, 96, 67, 0.2);
+  --border-color-muted: rgba(111, 96, 67, 0.1);
+
+  --md-sys-color-error: #b45339;
+  --md-sys-color-on-error: #ffffff;
+  --md-sys-color-success: #7b853a;
+  --md-sys-color-on-success: #ffffff;
+  --md-sys-color-card-border: rgba(111, 96, 67, 0.12);
+
+  --glass-shadow: 0 8px 32px 0 rgba(126, 92, 36, 0.08);
+  --glass-blur: blur(16px);
+}
+
+/* Lumen Slate Night Theme */
+html[data-theme="slate-night"] {
+  --md-sys-color-primary: #8fa3c8;
+  --md-sys-color-on-primary: #101621;
+  --md-sys-color-primary-container: rgba(143, 163, 200, 0.16);
+  --md-sys-color-on-primary-container: #dbe5f6;
+
+  --md-sys-color-secondary: #cbd5e1;
+  --md-sys-color-on-secondary: #111827;
+  --md-sys-color-secondary-container: rgba(203, 213, 225, 0.12);
+  --md-sys-color-on-secondary-container: #e5edf7;
+
+  --md-sys-color-tertiary: #94a3b8;
+  --md-sys-color-on-tertiary: #111827;
+
+  --md-sys-color-background: #111827;
+  --md-sys-color-on-background: #e5e7eb;
+  --md-sys-color-surface: #182233;
+  --md-sys-color-on-surface: #f1f5f9;
+  --md-sys-color-surface-variant: #243044;
+  --md-sys-color-on-surface-variant: #cbd5e1;
+
+  --md-sys-color-outline: #64748b;
+  --md-sys-color-outline-variant: #334155;
+
+  --border-color: rgba(203, 213, 225, 0.16);
+  --border-color-muted: rgba(203, 213, 225, 0.08);
+
+  --md-sys-color-error: #f87171;
+  --md-sys-color-on-error: #111827;
+  --md-sys-color-success: #9db47b;
+  --md-sys-color-on-success: #111827;
+  --md-sys-color-card-border: rgba(203, 213, 225, 0.1);
+
+  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.38);
+  --glass-blur: blur(16px);
+}
+
 /* Nord Light Theme */
 html[data-theme="light-nord"] {
   --md-sys-color-primary: #5e81ac;
@@ -120,165 +272,6 @@ html[data-theme="light-nord"] {
   --md-sys-color-card-border: rgba(46, 52, 64, 0.06);
   --glass-shadow: 0 8px 32px 0 rgba(46, 52, 64, 0.03);
   --glass-blur: blur(16px);
-}
-
-/* Sakura Blossom Light Theme */
-html[data-theme="light-sakura"] {
-  --md-sys-color-primary: #d05a74;
-  --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-primary-container: rgba(208, 90, 116, 0.06);
-  --md-sys-color-on-primary-container: #8c354a;
-  --md-sys-color-secondary: #e597a7;
-  --md-sys-color-on-secondary: #ffffff;
-  --md-sys-color-secondary-container: rgba(229, 151, 167, 0.08);
-  --md-sys-color-on-secondary-container: #8c354a;
-  --md-sys-color-tertiary: #a278b5;
-  --md-sys-color-on-tertiary: #ffffff;
-  --md-sys-color-background: #fdf6f6;
-  --md-sys-color-on-background: #5c2a39;
-  --md-sys-color-surface: rgba(255, 250, 250, 0.85);
-  --md-sys-color-on-surface: #5c2a39;
-  --md-sys-color-surface-variant: rgba(250, 235, 235, 0.9);
-  --md-sys-color-on-surface-variant: #8c5264;
-  --md-sys-color-outline: #8c5264;
-  --md-sys-color-outline-variant: #dbb2bc;
-  --border-color: rgba(92, 42, 57, 0.08);
-  --border-color-muted: rgba(92, 42, 57, 0.04);
-  --md-sys-color-error: #e05c5c;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-success: #5cbe8a;
-  --md-sys-color-on-success: #ffffff;
-  --md-sys-color-card-border: rgba(92, 42, 57, 0.06);
-  --glass-shadow: 0 8px 32px 0 rgba(92, 42, 57, 0.03);
-  --glass-blur: blur(16px);
-}
-
-/* Cyberpunk Neon Dark Theme */
-html[data-theme="dark-cyberpunk"] {
-  --md-sys-color-primary: #ff007f;
-  --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-primary-container: rgba(255, 0, 127, 0.15);
-  --md-sys-color-on-primary-container: #ff9ebb;
-  --md-sys-color-secondary: #00f0ff;
-  --md-sys-color-on-secondary: #0d0714;
-  --md-sys-color-secondary-container: rgba(0, 240, 255, 0.1);
-  --md-sys-color-on-secondary-container: #a6f5ff;
-  --md-sys-color-tertiary: #9d4edd;
-  --md-sys-color-on-tertiary: #ffffff;
-  --md-sys-color-background: #0d0714;
-  --md-sys-color-on-background: #e0e0ff;
-  --md-sys-color-surface: rgba(26, 12, 38, 0.7);
-  --md-sys-color-on-surface: #e0e0ff;
-  --md-sys-color-surface-variant: rgba(37, 18, 54, 0.6);
-  --md-sys-color-on-surface-variant: #b5a8cc;
-  --md-sys-color-outline: #00f0ff;
-  --md-sys-color-outline-variant: #ff007f;
-  --border-color: rgba(0, 240, 255, 0.2);
-  --border-color-muted: rgba(255, 0, 127, 0.15);
-  --md-sys-color-error: #ff3333;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-success: #00ff66;
-  --md-sys-color-on-success: #0d0714;
-  --md-sys-color-card-border: rgba(0, 240, 255, 0.1);
-  --glass-shadow: 0 8px 32px 0 rgba(255, 0, 127, 0.15);
-  --glass-blur: blur(16px);
-}
-
-/* Emerald Forest Dark Theme */
-html[data-theme="dark-forest"] {
-  --md-sys-color-primary: #10b981;
-  --md-sys-color-on-primary: #040a09;
-  --md-sys-color-primary-container: rgba(16, 185, 129, 0.12);
-  --md-sys-color-on-primary-container: #a7f3d0;
-  --md-sys-color-secondary: #34d399;
-  --md-sys-color-on-secondary: #040a09;
-  --md-sys-color-secondary-container: rgba(52, 211, 153, 0.08);
-  --md-sys-color-on-secondary-container: #d1fae5;
-  --md-sys-color-tertiary: #6ee7b7;
-  --md-sys-color-on-tertiary: #040a09;
-  --md-sys-color-background: #060f0e;
-  --md-sys-color-on-background: #e2ebe9;
-  --md-sys-color-surface: rgba(13, 28, 25, 0.65);
-  --md-sys-color-on-surface: #e2ebe9;
-  --md-sys-color-surface-variant: rgba(20, 41, 37, 0.55);
-  --md-sys-color-on-surface-variant: #94a8a4;
-  --md-sys-color-outline: #86efac;
-  --md-sys-color-outline-variant: #15803d;
-  --border-color: rgba(52, 211, 153, 0.15);
-  --border-color-muted: rgba(52, 211, 153, 0.08);
-  --md-sys-color-error: #f87171;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-success: #34d399;
-  --md-sys-color-on-success: #040a09;
-  --md-sys-color-card-border: rgba(52, 211, 153, 0.06);
-  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
-  --glass-blur: blur(16px);
-}
-
-/* Dracula Classic Dark Theme */
-html[data-theme="dark-dracula"] {
-  --md-sys-color-primary: #bd93f9;
-  --md-sys-color-on-primary: #282a36;
-  --md-sys-color-primary-container: rgba(189, 147, 249, 0.15);
-  --md-sys-color-on-primary-container: #d6bbfb;
-  --md-sys-color-secondary: #ff79c6;
-  --md-sys-color-on-secondary: #282a36;
-  --md-sys-color-secondary-container: rgba(255, 121, 198, 0.1);
-  --md-sys-color-on-secondary-container: #ffb3db;
-  --md-sys-color-tertiary: #50fa7b;
-  --md-sys-color-on-tertiary: #282a36;
-  --md-sys-color-background: #282a36;
-  --md-sys-color-on-background: #f8f8f2;
-  --md-sys-color-surface: rgba(33, 34, 44, 0.7);
-  --md-sys-color-on-surface: #f8f8f2;
-  --md-sys-color-surface-variant: rgba(40, 42, 54, 0.6);
-  --md-sys-color-on-surface-variant: #6272a4;
-  --md-sys-color-outline: #ff79c6;
-  --md-sys-color-outline-variant: #6272a4;
-  --border-color: rgba(189, 147, 249, 0.18);
-  --border-color-muted: rgba(255, 121, 198, 0.1);
-  --md-sys-color-error: #ff5555;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-success: #50fa7b;
-  --md-sys-color-on-success: #282a36;
-  --md-sys-color-card-border: rgba(189, 147, 249, 0.08);
-  --glass-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.35);
-  --glass-blur: blur(16px);
-}
-
-/* OLED Pitch Black Theme */
-html[data-theme="dark-oled"] {
-  --md-sys-color-primary: #3b82f6;
-  --md-sys-color-on-primary: #ffffff;
-  --md-sys-color-primary-container: rgba(59, 130, 246, 0.15);
-  --md-sys-color-on-primary-container: #93c5fd;
-  --md-sys-color-secondary: #60a5fa;
-  --md-sys-color-on-secondary: #000000;
-  --md-sys-color-secondary-container: rgba(96, 165, 250, 0.1);
-  --md-sys-color-on-secondary-container: #bfdbfe;
-  --md-sys-color-tertiary: #38bdf8;
-  --md-sys-color-on-tertiary: #000000;
-  --md-sys-color-background: #000000;
-  --md-sys-color-on-background: #ffffff;
-  --md-sys-color-surface: rgba(10, 10, 10, 0.95);
-  --md-sys-color-on-surface: #ffffff;
-  --md-sys-color-surface-variant: rgba(20, 20, 20, 0.98);
-  --md-sys-color-on-surface-variant: #cccccc;
-  --md-sys-color-outline: #888888;
-  --md-sys-color-outline-variant: #444444;
-  --border-color: rgba(255, 255, 255, 0.15);
-  --border-color-muted: rgba(255, 255, 255, 0.08);
-  --md-sys-color-error: #ef4444;
-  --md-sys-color-on-error: #ffffff;
-  --md-sys-color-success: #10b981;
-  --md-sys-color-on-success: #ffffff;
-  --md-sys-color-card-border: rgba(255, 255, 255, 0.1);
-  --glass-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
-  --glass-blur: none;
-}
-
-html[data-theme="dark-oled"] body {
-  background-image: none !important;
 }
 
 /* Theme Dropdown & Selection Styling */
