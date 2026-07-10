@@ -1,3 +1,4 @@
+import ThemeSelectionModal from "./components/ThemeSelectionModal";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import Sidebar from "./components/Sidebar";
 import TopStatusBar from "./components/TopStatusBar";
@@ -11,6 +12,17 @@ import { cleanupCandidates, formatBytes, getCleanupCandidates, getDiagnostics, g
 import "./App.css";
 
 function App() {
+  const [showThemeSelection, setShowThemeSelection] = useState(() => {
+  return localStorage.getItem("lumen-theme-selected") !== "true";
+});
+
+const handleThemeSelectionComplete = useCallback((selectedTheme) => {
+  if (selectedTheme) {
+    setTheme(selectedTheme);
+  }
+
+  setShowThemeSelection(false);
+}, []);
   const dialogResolverRef = useRef(null);
   const [dialog, setDialog] = useState(null);
 
